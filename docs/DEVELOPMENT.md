@@ -1,7 +1,7 @@
-# 开发方案、任务顺序、局部测试与进度
+# 开发方案、任务顺序与局部测试规则
 
 **方案版本**：v1.2 · 2026-11-04  
-**当前状态**：设计确定；P00 尚未开始。  
+**当前状态**：设计确定；P00 尚未开始。各阶段真实进度独立记录在 `docs/progress/Pxx.md`，本文件只维护计划与执行规则。  
 **原则**：从零构建 Mini DeerFlow，逐步增加能力；一个阶段可以拆成多个很小的任务，但 Codex 每次只执行一个；用户审核后才能进入下一个阶段。
 
 ## 1. 固定的实施方案
@@ -168,7 +168,7 @@ Git 提交例：chore: bootstrap minimal FastAPI backend with uv。只能提交�
 
 如果已配置 GitHub 访问，可以把 feat/p00-bootstrap 分支推送到远端，方便人工审核；不自动合并 main、不改其他分支。如果认证失败，仅报告本地 commit 与错误，不强制改认证方式。
 
-开发完成后，在本文件末尾进度账本把 P00 更新为 PENDING_REVIEW，并记录 Git SHA、测试命令、结果与未验证项。审核通过后才标 ACCEPTED。**当前仅提交本计划书时，P00 仍为 PLAN_READY（未开发）**。
+开发完成后，仅更新 `docs/progress/P00.md` 为 PENDING_REVIEW，并记录 Git SHA、测试命令、结果与未验证项。审核通过后才标 ACCEPTED。**当前仅提交本计划书时，P00 仍为 PLAN_READY（未开发）**。本文件作为开发计划，不记录执行日志。
 
 #### P00.7 必须满足的验收标准
 
@@ -187,7 +187,7 @@ Git 提交例：chore: bootstrap minimal FastAPI backend with uv。只能提交�
 
 #### P00.8 交给 Codex 的执行指令
 
-> 请先阅读 README.md、docs/ARCHITECTURE.md 以及 docs/DEVELOPMENT.md 的“P00 — 工程初始化”章节。这次**只完成 P00**，从当前 GitHub 仓库创建/复用 feat/p00-bootstrap 分支，先核查已有文件和未提交改动；使用 Python 3.12 + uv 创建最小 FastAPI 后端（src/minideerflow 包、/health、极简配置、uv.lock、.gitignore、.env.example、pytest/ruff）。不复制 DeerFlow，不提前开发 Agent、LangGraph、数据库、MCP、RAG、前端或 Docker。仅运行 P00 新增/修改内容及直接受影响接口的测试，再验证真实 Uvicorn 健康接口。更新 README 与本文件 P00 进度，提交当前开发分支并汇报测试命令、结果、未测项和完整 SHA。不要合并 main，也不要开始 P01，提交后等待我审核。
+> 请先阅读 README.md、docs/ARCHITECTURE.md 以及 docs/DEVELOPMENT.md 的“P00 — 工程初始化”章节。这次**只完成 P00**，从当前 GitHub 仓库创建/复用 feat/p00-bootstrap 分支，先核查已有文件和未提交改动；使用 Python 3.12 + uv 创建最小 FastAPI 后端（src/minideerflow 包、/health、极简配置、uv.lock、.gitignore、.env.example、pytest/ruff）。不复制 DeerFlow，不提前开发 Agent、LangGraph、数据库、MCP、RAG、前端或 Docker。仅运行 P00 新增/修改内容及直接受影响接口的测试，再验证真实 Uvicorn 健康接口。更新 README 与 `docs/progress/P00.md`，提交当前开发分支并汇报测试命令、结果、未测项和完整 SHA。不要合并 main，也不要开始 P01，提交后等待我审核。
 
 ### P01 — 最小可运行 Agent
 
@@ -267,11 +267,11 @@ Git 提交例：chore: bootstrap minimal FastAPI backend with uv。只能提交�
 - 本次任务 ID 与验收要求；
 - 本项目当前涉及的少量源码/测试（通常 2–5 个文件）；
 - 对应 DeerFlow 1–3 个明确参考文件；
-- 当前真实功能摘要（本文件末尾进度区和本阶段提交）。
+- 当前真实功能摘要（`docs/progress/Pxx.md` 中的当前阶段进度与对应提交）。
 
 先说明业务主流程，再选择框架/实现，再完成最小主链，然后处理本次功能的边界。新技术第一次出现时，说明“是什么、为什么现在引入、核心机制、替代方案”；不要为了美观创建空模块或无用设计模式。
 
-完成后必须报告：**改动文件、真实运行命令、仅本次改动的测试及结果、未测试范围、Git SHA、发现的问题、下一步依赖**。阶段完成标记 PENDING_REVIEW，等待用户与 Codex 审查；用户明确说开始下一阶段才继续。
+完成后必须报告：**改动文件、真实运行命令、仅本次改动的测试及结果、未测试范围、Git SHA、发现的问题、下一步依赖**。在当前阶段 `docs/progress/Pxx.md` 中追加真实记录并标记 PENDING_REVIEW，等待用户与 Codex 审查；用户明确说开始下一阶段才继续。禁止擅自修改其他阶段的进度。
 
 ## 6. 决策与风险（本文件集中维护，不再另建决策/测试文档）
 
@@ -283,20 +283,21 @@ Git 提交例：chore: bootstrap minimal FastAPI backend with uv。只能提交�
 
 **重要取舍：** 没有当前业务/实测瓶颈，不引入 Redis、RabbitMQ、PostgreSQL、K8s、多租户、复杂权限和全能 Coding Agent。
 
-## 7. 当前进度账本
+## 7. 各阶段进度文档（唯一进度来源）
 
-| 阶段 | 状态 | 说明 |
-|---|---|---|
-| 项目范围与实施方案 | CONFIRMED | 本次已整理为 README + 两份主文档 |
-| P00 | PLAN_READY | P00 正式执行方案已完成；本地编码与测试尚未开始 |
-| P01 | NOT_STARTED | 最小 Agent |
-| P02 | NOT_STARTED | 运行服务/薄前端 |
-| P03 | NOT_STARTED | Workspace |
-| P04 | NOT_STARTED | Plan/Sub-Agent |
-| P05 | NOT_STARTED | MCP/Skills |
-| P06 | NOT_STARTED | 上下文/可靠性 |
-| P07 | NOT_STARTED | Research |
-| P08 | NOT_STARTED | RAG |
-| P09 | NOT_STARTED | 部署/评测 |
+规划、技术取舍与任务步骤只保留在本文件；每个阶段单独维护一份执行记录，不重复粘贴开发任务书。**Codex 只更新当前正在执行的阶段**，其他阶段保持原样。
 
-更新格式：`日期 | 任务 ID | 变更摘要 | 只测当前哪些内容/真实结果 | 未测范围 | Commit SHA | 用户审核状态`。进度事实只写在这里，不另建重复的 PROGRESS、TEST_PLAN 或 Codex 规则文档。
+- [P00 进度记录](progress/P00.md)
+- [P01 进度记录](progress/P01.md)
+- [P02 进度记录](progress/P02.md)
+- [P03 进度记录](progress/P03.md)
+- [P04 进度记录](progress/P04.md)
+- [P05 进度记录](progress/P05.md)
+- [P06 进度记录](progress/P06.md)
+- [P07 进度记录](progress/P07.md)
+- [P08 进度记录](progress/P08.md)
+- [P09 进度记录](progress/P09.md)
+
+记录标准：实际执行日期、任务 ID、分支/提交 SHA、修改文件、仅本次变更涉及的测试命令与真实结果、未测/失败项、阻塞或设计偏差、人工审核意见。禁止根据“计划已写好”自动把开发状态改为完成。阶段状态为 `NOT_STARTED / PLAN_READY / IN_PROGRESS / PENDING_REVIEW / ACCEPTED / BLOCKED / DEFERRED`；未经人工验收不得设置 `ACCEPTED`。
+
+每个阶段进度文件是该阶段状态与执行证据的唯一来源；README 与本文件不再维护一张需要同步的状态总表。
