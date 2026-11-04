@@ -1,6 +1,6 @@
 # 开发方案、任务顺序、局部测试与进度
 
-**方案版本**：v1.1 · 2026-11-04  
+**方案版本**：v1.2 · 2026-11-04  
 **当前状态**：设计确定；P00 尚未开始。  
 **原则**：从零构建 Mini DeerFlow，逐步增加能力；一个阶段可以拆成多个很小的任务，但 Codex 每次只执行一个；用户审核后才能进入下一个阶段。
 
@@ -62,13 +62,132 @@ Codex 报告必须明确列出“本次改了什么 → 测了哪些 → 为什�
 
 ## 4. 每阶段任务详细说明
 
-### P00 — 工程初始化（下一步唯一允许开始的任务）
+### P00 — 工程初始化（完整执行计划，未开始）
 
-目标：建立最小 Python 项目、统一环境与 Git 工作规范。
-实际工作：Python 3.12、uv、依赖锁；FastAPI 健康检查；最小配置（含模型环境变量模板）、pytest、ruff、.gitignore；必要的 backend/ 结构。暂不创建复杂前端/数据库/十几个空业务包。
-验收：干净环境能够安装、启动健康检查；能运行 P00 的测试；没有真实密钥提交；README 与实际命令一致。
-参考：DeerFlow `agents/factory.py` 的分层思想，实际框架版本要本地验证。
-**不做**：Agent 模型调用、MCP、Sub-Agent、RAG、Docker。
+**任务编号**：P00  
+**目标**：从现有只有文档的 GitHub 仓库，建立一个能在 PyCharm 中启动、断点调试、单独测试的最小 FastAPI 后端。P00 的交付是“可复现的工程基线”，**不是 Agent 产品功能**。  
+**执行者**：本地 Codex；在专用分支操作；完成后等待人工验收，不进入 P01。  
+**技术定案**：Python 3.12、uv、FastAPI、Pydantic、Uvicorn、pytest、httpx、ruff。当前不需要连接模型 API。
+
+#### P00.1 现状检查与 Git 安全
+
+1. 在 PyCharm 中打开克隆的 https://github.com/Felix0410/Agent 仓库根目录；本地若尚未克隆，先通过 PyCharm 的 Clone Repository 完成，不再新建一个嵌套 Python Project。
+2. 查看 Git remote、当前分支、状态、已有文件和未提交改动。保留 README、docs/ARCHITECTURE.md、docs/DEVELOPMENT.md；遇到未知文件或本地修改先报告，不能覆盖或重置。
+3. 在干净 main 基础上创建 feat/p00-bootstrap 开发分支；如果分支已存在，先核查再沿用，不强行覆盖。不得直接把业务代码推到 main。
+4. 查看 macOS、Git、Python、uv 的版本；如缺少 Python 3.12 或 uv，再安装到用户环境。不修改系统 Python，不使用全局 pip 给这个项目装依赖。
+5. P00 不需要克隆 DeerFlow。仅参考其 Agent 工厂的分层思想，必要时查看固定 v2.0.0 的 backend/packages/harness/deerflow/agents/factory.py；不搬运整套源码。
+
+**交付**：记录 Git 基线 SHA、系统与工具版本、环境问题。无法安装或运行时明确标记 BLOCKED，不用伪造成功。
+
+#### P00.2 最小工程布局
+
+项目名称为 mini-deerflow，Python 包名定为 minideerflow。使用 src 布局和 backend 独立的 uv 项目；目录按实际需求创建：
+
+~~~text
+Agent/
+├── README.md
+├── docs/
+│   ├── ARCHITECTURE.md
+│   └── DEVELOPMENT.md
+├── .gitignore
+├── .env.example
+└── backend/
+    ├── pyproject.toml
+    ├── uv.lock
+    ├── src/
+    │   └── minideerflow/
+    │       ├── __init__.py
+    │       ├── main.py
+    │       └── config.py
+    └── tests/
+        ├── test_health.py
+        └── test_config.py
+~~~
+
+虚拟环境由 uv 管理，放在 backend/.venv 并忽略提交。config.py 只放必要配置，如果最终没有值得独立的配置逻辑，可以在代码审核中简化。不要提前创建空的 agents、subagents、tools、mcp、skills、runtime、knowledge、frontend 等模块。
+
+#### P00.3 依赖与版本管理
+
+- Python 3.12；使用 uv 管理项目及 lockfile，提交 backend/pyproject.toml 和 backend/uv.lock。
+- 本阶段运行依赖仅 FastAPI、Uvicorn 和实际需要的 Pydantic 配置库（如 pydantic-settings）；开发依赖为 pytest、httpx、ruff。
+- 使用 pyproject.toml 的 dev dependency group，按照实际配置运行 uv sync --group dev；不要混淆 dependency group 与 optional extra 参数。
+- 本阶段不安装 LangChain、LangGraph、MCP SDK、Docling、Chroma、Node.js、Redis、RabbitMQ、数据库驱动或 Docker。这些在对应阶段引入。
+- 依赖小版本由 Codex 在本机确认安装成功、生成锁文件后锁定。不把尚未验证的版本组合写成“已通过”。
+
+实际命令以 backend 为工作目录，开发时预期：
+
+~~~bash
+cd backend
+uv sync --group dev
+uv run python -c "import minideerflow"
+uv run uvicorn minideerflow.main:app --reload --host 127.0.0.1 --port 8000
+~~~
+
+请实际验证这些命令；如因项目打包方式调整，README 应使用真正验证过的命令，不得保留失效示例。
+
+#### P00.4 应用入口、配置与运行
+
+**健康检查**：GET /health 无需密钥和数据库；HTTP 200，返回 JSON 对象：
+
+~~~json
+{"status":"ok"}
+~~~
+
+这是进程存活接口，不代表 LLM、MCP 或知识库就绪。暂不实现 /chat、/threads、/runs、SSE、Tool Calling、前端和 Agent 框架。
+
+**配置**：只需要 APP_ENV（默认 development）和 LOG_LEVEL（默认 INFO）等当前会用到的配置。可使用 pydantic-settings 统一加载并校验；没有 .env、没有 MODEL_API_KEY 时仍应正常启动。根目录 .env.example 只包含空值/示例值，不能提交真实 .env 或密钥；日志不可输出敏感环境变量。
+
+**实现原则**：一个简洁的 FastAPI 应用和配置对象即可。可保留以后扩展的导入边界，但不要提前构建复杂的依赖注入容器、全局异常树、中间件工厂和十几个无实际用途的模块。
+
+**PyCharm 配置**：直接打开 Agent 仓库；Python Interpreter 指向 backend/.venv/bin/python；Uvicorn Run/Debug Configuration 使用 backend 作为工作目录，模块 uvicorn，参数 minideerflow.main:app --host 127.0.0.1 --port 8000。能在入口/配置代码中设置断点；如果 Codex 不能操作本机 IDE，应明确把 PyCharm 手工验证列为“待用户确认”，不能虚称已经测试。
+
+#### P00.5 局部测试范围（不得全量测试）
+
+本阶段只验证 P00 本次新增的应用入口、配置、包管理及安全忽略规则：
+
+| 局部验收项 | 最小验证方法 | 必须看到的结果 |
+| --- | --- | --- |
+| Python 包可安装 | 在 backend 运行 uv sync --group dev | 依赖安装成功，锁文件存在 |
+| 包导入 | uv run python -c "import minideerflow" | 无导入错误 |
+| 健康接口 | pytest 的 FastAPI TestClient | GET /health 为 200，JSON 严格为 status=ok |
+| 配置默认值 | 不设置 .env 运行配置测试 | 无模型 Key 时成功读取默认环境 |
+| 配置错误 | 如有受校验的字段，输入非法值 | 明确校验失败而非静默忽略 |
+| 静态检查 | uv run ruff check src tests | 无当前代码错误 |
+| 真实服务启动 | uv run uvicorn，再 curl 127.0.0.1:8000/health | 真正返回 200 与 JSON |
+| Git 安全 | git status 与 git check-ignore | .env、.venv、缓存不被跟踪 |
+
+P00 只运行 tests/test_health.py 和 tests/test_config.py（如果确实创建）；无须执行 Research、RAG、Sub-Agent 或后续模块测试。若版本/环境导致测试命令与上表不同，以实测结果为准并解释。TestClient 与真实 Uvicorn curl 结果应分别报告，不混为一谈。
+
+不要为了“测试完整”临时创建没有业务意义的测试框架；**当前新增/修改内容及直接影响范围之外不做重复测试**。
+
+#### P00.6 Codex 工作步骤与提交规则
+
+按以下顺序完成：核查仓库/环境 → 建立最小 Python 包和 uv 依赖 → 写 main.py/config.py 和健康检查 → 写局部测试、.gitignore、.env.example → 实际安装和运行测试 → 更新 README 的真实启动方法 → 检查 Git 变更 → 提交专用分支。
+
+Git 提交例：chore: bootstrap minimal FastAPI backend with uv。只能提交计划内源代码、测试、锁文件和文档更新；不提交虚拟环境、密钥、个人资料或运行产物。
+
+如果已配置 GitHub 访问，可以把 feat/p00-bootstrap 分支推送到远端，方便人工审核；不自动合并 main、不改其他分支。如果认证失败，仅报告本地 commit 与错误，不强制改认证方式。
+
+开发完成后，在本文件末尾进度账本把 P00 更新为 PENDING_REVIEW，并记录 Git SHA、测试命令、结果与未验证项。审核通过后才标 ACCEPTED。**当前仅提交本计划书时，P00 仍为 PLAN_READY（未开发）**。
+
+#### P00.7 必须满足的验收标准
+
+- [ ] 从既有仓库安全建立开发分支，没有改坏用户未提交内容。
+- [ ] Python 3.12、uv、backend/pyproject.toml、backend/uv.lock 配置可复现。
+- [ ] 后端包 minideerflow 可导入；无多余空模块或复杂架构。
+- [ ] 无 .env 与模型密钥也能启动 GET /health，HTTP 200，返回 status=ok。
+- [ ] 本阶段健康接口、配置、导入、ruff、真实 Uvicorn/curl 验证有执行证据。
+- [ ] .env、虚拟环境和临时缓存不会被提交。
+- [ ] README 说明真正可用的安装、启动、测试与 PyCharm 解释器。
+- [ ] Codex 给出变更文件、命令和结果、未测试项及原因、Commit SHA 与风险。
+- [ ] PyCharm Run/Debug 由本机实测或如实记录待人工确认。
+- [ ] 没有引入模型调用、LangGraph、SQLite、RAG、MCP、前端、Docker；没有自动启动 P01。
+
+**P00 完成定义**：一台干净的 macOS Python 3.12/uv 开发机可安装项目，在 PyCharm 中查看并调试一个真正运行的 FastAPI 服务，/health 返回预期结果；这一阶段不要求 AI 对话。
+
+#### P00.8 交给 Codex 的执行指令
+
+> 请先阅读 README.md、docs/ARCHITECTURE.md 以及 docs/DEVELOPMENT.md 的“P00 — 工程初始化”章节。这次**只完成 P00**，从当前 GitHub 仓库创建/复用 feat/p00-bootstrap 分支，先核查已有文件和未提交改动；使用 Python 3.12 + uv 创建最小 FastAPI 后端（src/minideerflow 包、/health、极简配置、uv.lock、.gitignore、.env.example、pytest/ruff）。不复制 DeerFlow，不提前开发 Agent、LangGraph、数据库、MCP、RAG、前端或 Docker。仅运行 P00 新增/修改内容及直接受影响接口的测试，再验证真实 Uvicorn 健康接口。更新 README 与本文件 P00 进度，提交当前开发分支并汇报测试命令、结果、未测项和完整 SHA。不要合并 main，也不要开始 P01，提交后等待我审核。
 
 ### P01 — 最小可运行 Agent
 
@@ -169,7 +288,7 @@ Codex 报告必须明确列出“本次改了什么 → 测了哪些 → 为什�
 | 阶段 | 状态 | 说明 |
 |---|---|---|
 | 项目范围与实施方案 | CONFIRMED | 本次已整理为 README + 两份主文档 |
-| P00 | NOT_STARTED | 下一项：工程初始化 |
+| P00 | PLAN_READY | P00 正式执行方案已完成；本地编码与测试尚未开始 |
 | P01 | NOT_STARTED | 最小 Agent |
 | P02 | NOT_STARTED | 运行服务/薄前端 |
 | P03 | NOT_STARTED | Workspace |
