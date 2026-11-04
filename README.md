@@ -1,40 +1,52 @@
-# PaperWeave Research Agent — V2 设计与开发仓库
+# Mini DeerFlow — 轻量级通用多智能体任务执行系统
 
-> 当前仓库状态：**设计文档已启动，应用代码尚未导入；所有 V2 功能均为规划，不代表已经实现。**
->
-> 更新日期：2026-10-27。开发原则：保留 PaperWeave 科研论文工作台，增强 BRAG 式知识构建，独立新增 Deep Research，并通过可重复评测验收；不扩展到通用办公。
+> 项目状态：完整设计已完成，业务代码尚未开始；日期：2026-11-04。
+> 本仓库已正式转为 Mini DeerFlow 项目，旧科研工作台方向不再继续。旧版资料只保留在 Git 历史中。
+> 开发方式：从零建立自己的模块化单体，不 Fork 或复制 DeerFlow 整体工程；按需研究 DeerFlow 2.0 具体文件。
 
-## 一句话产品定义
+## 项目定位
 
-面向个人研究者的**证据可追溯科研工作台**：管理和精读论文，从论文、章节、图表与算法中检索证据；在此基础上执行长程文献调研、论文发现、结构化抽取、跨论文可比性分析及研究报告交付。
+构建可自主规划、调用工具、委派子智能体、使用 Skills/MCP、管理长任务与上下文、保存文件产物的通用 AI Agent。以个人使用与工程化学习为第一目标，追求功能完整、行为可靠、代码可解释，而非重建一套企业级 Agent 平台。
 
-## 文档导航
+## 目标业务
 
-| 文件 | 用途 |
+1. 联网深度研究：开放主题 → 规划 → 多源检索 → 子任务分析 → 证据核验 → 可引用的报告。
+2. 多文档问答：上传 PDF/Markdown/TXT → 解析与索引 → RAG 检索 → 跨文档分析 → 原文引用。
+3. 通用文件任务：多步骤 Todo → 受控工具/文件读写 → 任务执行 → 生成可下载的报告或数据文件。
+
+单轮普通对话和简单工具操作是这三类业务的共同基础。业务功能通过 Tool、Skill 和独立服务接入，不和 Agent 主循环硬耦合。
+
+## 关键能力
+
+Lead Agent、LangGraph 状态、Plan/Todo、Sub-Agent、Tool Registry、MCP、Skills、文件 Workspace、Checkpoint、Run/Task 生命周期、SSE、上下文压缩、Web UI、业务评测。
+
+首版默认单用户、单机、单 FastAPI Worker。不开启不可信 Shell 执行，不提前部署 Redis、RabbitMQ、Kubernetes、微服务或复杂多租户系统。
+
+## 详细文档
+
+| 文件 | 核心内容 |
 | --- | --- |
-| [00 产品决策](docs/00-CHARTER.md) | 目标、边界、版本与开发原则 |
-| [01 完整功能说明](docs/01-FULL-PRODUCT-SPEC.md) | **原版全部主要功能 + V2 新增功能 + 各模块技术实现路线** |
-| [02 目标架构](docs/02-ARCHITECTURE.md) | 数据流、模块职责、状态与新旧隔离 |
-| [03 BRAG 改进](docs/03-BRAG-BUILD.md) | B01/B02/B03：分层知识、多视角索引、分层检索 |
-| [04 Deep Research](docs/04-DEEP-RESEARCH.md) | 长研究任务、科研事实模型、对比与报告 |
-| [05 Tools / MCP / Memory](docs/05-TOOLS-MCP-MEMORY.md) | 工具层、GitHub MCP、任务记忆与安全 |
-| [06 测试和评测](docs/06-EVALUATION.md) | Baseline、消融、任务级评分和运行回归 |
-| [07 任务拆分](docs/07-ROADMAP.md) | T00–T12 + B01–B03，逐包可验收 |
-| [08 Codex 协作规范](docs/08-CODEX-RULES.md) | 实施约束、提交格式、证据与审批 |
-| [09 终验与演示](docs/09-ACCEPTANCE-DEMOS.md) | 验收门槛、必备演示路径 |
-| [10 上游事实核验](docs/10-UPSTREAM-BASELINE.md) | 原版 PaperWeave 已有的能力、边界及来源 |
-| [11 进度](docs/11-PROGRESS.md) | 实施进度、提交、阻塞、验收记录 |
-| [12 参考与设计决策](docs/12-REFERENCES-DECISIONS.md) | BRAG 参考、架构决策及变更规则 |
+| [01 业务需求与总体架构](docs/01-PRODUCT-AND-ARCHITECTURE.md) | 产品定位、所有业务能力、系统分层、对象模型、端到端链路、状态与安全 |
+| [02 完整开发流程](docs/02-DEVELOPMENT-ROADMAP.md) | P00–P12 任务包、顺序、每阶段实现方案、依赖、验收、交付 |
+| [03 DeerFlow 源码地图](docs/03-DEERFLOW-SOURCE-MAP.md) | 固定版本、具体源文件、如何借鉴、哪些设计不照搬 |
+| [04 模块与接口契约](docs/04-CONTRACTS-AND-DESIGN.md) | Tool / Sub-Agent / Event / API / Workspace 契约与错误语义 |
+| [05 测试和 Agent 评测](docs/05-TESTS-AND-EVALUATION.md) | 单测、集成、E2E、故障注入、研究和 RAG 指标、终验 |
+| [06 Codex 协作及部署](docs/06-WORKFLOW-AND-OPERATIONS.md) | AI 上下文预算、任务交付模板、Git/安全、环境与部署 |
+| [07 决策与进度](docs/07-DECISIONS-AND-PROGRESS.md) | 确认的设计、未决事项、阶段账本、风险与审查记录 |
 
-## 启动开发的顺序
+## 快速理解开发顺序
 
-首先由 Codex 执行 [T00 架构审计](docs/07-ROADMAP.md)，确认上游仓库、代码引入方式、许可证与目录情况；然后 T01 将原版源码安全引入当前仓库并建立基线，绝不可删除上述设计文档。完成 T02 公共接口后，按路线图依次推进独立任务。
+P00 基线 → P01 单 Agent → P02 API/会话/SSE → P03 Workspace → P04 Plan/Sub-Agent → P05 MCP/Skills → P06 长任务与上下文 → P07 Web UI → P08 Deep Research → P09 文档 RAG → P10 安全与故障恢复 → P11 评测优化 → P12 发布验收。
 
-**执行节奏：每次只执行一个任务包；测试、文档、Git SHA 与审核通过后，才进入下一个任务。**
+这是逻辑依赖而不是承诺工期。每一阶段实现最小可运行链路、完成测试、单独提交，再等待人工审核。
 
-## 项目出处与声明
+## 参考与授权
 
-- 原版： [PaperWeave / Agentic RAG Paper Assistant](https://github.com/zebir-sir/agentic-rag-paper-assistant)。
-- BRAG 设计借鉴：小米技术公开介绍的 [Mi-BRAG](https://weibo.com/ttarticle/p/show?id=2309405174583971152010)。本项目不是小米官方产品，不声称复现其未公开的内部实现。
-- 迁移上游源码时保留其许可证、版权声明与必要归属；README 中区分继承功能和本项目新增贡献。
-- 本仓库当前尚未导入原版业务源码，文档涉及源码与技术栈的结论基于截至 2026-10-27 的上游文档及部分静态审查，须经 T00/T01 本地复核。
+- DeerFlow 上游：https://github.com/bytedance/deer-flow
+- 固定研究基线：v2.0.0，commit 7e7f0410797693cf882594555ba414e0361d4c6f。
+- 上游许可：https://github.com/bytedance/deer-flow/blob/v2.0.0/LICENSE （MIT）。若复制/改编任何源码，保留对应版权许可与来源声明。
+- 上游使用仅限技术参考；本项目实际功能、性能、测试结果需以自己的代码与证据为准，不能冒充上游成果。
+
+## 当前事实
+
+目前只有设计文档。没有已完成的 Agent、前端、数据库、评测结果或部署性能。首次开发任务是 P00，不可跳过工程基线直接堆砌模块。
