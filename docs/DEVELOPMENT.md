@@ -321,45 +321,128 @@ Git 提交例：chore: bootstrap minimal FastAPI backend with uv。只能提交�
 
 **DeerFlow 参考**：\`agents/middlewares/todo_middleware.py\`、\`tools/builtins/task_tool.py\`、\`subagents/executor.py\`，注意这些文件根路径均为 \`backend/packages/harness/deerflow/\`。父图 Checkpoint 不保证进程内子任务精确恢复。
 
-### P05 — MCP 与 Skills
+### P05 — 统一 ToolRegistry、MCP 适配器与 Skills
 
-目标：新增 MCP 工具和 SKILL.md 不需要重写 Lead Agent。
-实现：统一 ToolRegistry；一类真实只读 MCP Server；Tool allowlist/timeout；Skills 元信息发现、按需正文注入及工具约束。
-局部测试：新工具调用、MCP 连接失败、Schema 校验、Skill 解析/激活与禁用工具无法越权。
-参考：`tools/tools.py`、`mcp/tools.py`、`skills/parser.py`、`skills/tool_policy.py`。
-不做：MCP 市场/自动安装、复杂认证服务。
+**业务链**：Lead 请求可用工具 → Registry 合并内置工具与经批准的 MCP 工具 → ToolExecutor 统一校验权限/超时/异常 → 模型按需选择工具；当任务需要某种工作方法时，\`list_skills/read_skill\` 只加载对应 SKILL.md 的正文。**MCP 是工具来源，Skill 是执行说明，二者不是同一套运行机制。**
 
-### P06 — 上下文、预算与可靠执行
+| 新增/修改文件 | 编码必须完成的具体内容 |
+| --- | --- |
+| \`tools/registry.py\` | \`ToolRegistry.register/get/list_allowed\`：按唯一名字注册工具（重名直接拒绝，不静默覆盖）；每项含 ToolSchema、权限级别、超时与来源；合并 P01、P03、P04 工具及 MCP Tool。 |
+| \`tools/executor.py\` | \`execute(tool_name,arguments,policy,context)\`：先检查名字、权限、参数，再执行指定工具；按工具声明区分 read/write，超时、错误统一封装；未来网络有副作用操作遇未知结果不得盲重试。若 LangChain 的 tool lifecycle 与调用链不匹配，使用框架支持的 Middleware 包裹执行，避免另造与框架竞争的工具主循环。 |
+| \`tools/mcp_adapter.py\` | 用 \`langchain-mcp-adapters\` 的现成 Client/工具转换接入配置好的 MCP Server，映射工具名/Schema/说明，执行统一转交 ToolExecutor；MCP 连接失败分类为 \`MCP_UNAVAILABLE\`，不能影响内置工具。 |
+| \`core/mcp_settings.py\` | 使用明确的本地配置（如 \`MCP_SERVERS\` 或单个受控配置文件）声明 server_id、transport、URL/command、timeout、allowlist；第一版只允许用户预先配置的只读 Server，禁止模型自动新增任意 stdio command。 |
+| \`skills/models.py\` | \`SkillMeta(name,description,path,allowed_tools)\`，记录必要元信息，不将所有正文常驻系统 Prompt。 |
+| \`skills/loader.py\` | \`discover_skills(root)\` 读取受控本地 Skills 目录，\`load_skill(name)\` 使用安全 YAML 解析（需要时加入 PyYAML），验证名称唯一、正文大小上限、所需工具是否存在；禁止从任意 URL 自动下载安装 Skill。 |
+| \`tools/skill_tools.py\` | \`list_skills()\` 输出名称/简介，\`read_skill(name)\` 返回本地 Skill 必要正文；模型只在需要时加载，激活不改变执行器 allowlist。 |
+| \`skills/public/example-research/SKILL.md\` | 一个实际可执行的最小模板：输入目标、检索步骤、来源标注、输出规范；当前不实现 P07 的全部 Research 业务。 |
+| \`tests/test_tool_registry.py\`、\`tests/test_mcp.py\`、\`tests/test_skills.py\` | 重名、拒绝越权、参数错误、超时、MCP 断开、坏 YAML、Skill 工具不存在、超长 Skill、只读权限下执行写工具被拒绝。 |
 
-目标：长任务不无限吃上下文；取消、错误、模型超时有正确状态。
-实现：Token/工具次数/时间预算、工具长输出管理、触发式摘要与保护性状态、循环检测、Run 取消和服务重启孤儿 Run 标记。
-局部测试：触发摘要后 Todo/来源引用保留、预算终止、当前 Run 取消/恢复行为和错误路径。
-参考：`summarization_middleware.py`、`tool_output_budget_middleware.py`、`runtime/runs/manager.py`。
-不做：未经证明的“任意中断点自动恢复”，不做完整长期记忆。
+**固定权限策略**：工具默认 \`DENY\`，按 Run/角色显式构造 \`allowed_tools\`；子 Agent 可用工具是“父权限 ∩ 角色权限 ∩ 本次任务授权”，任何 Skill 提示都无权提升权限。ToolExecutor 对工具的名字和参数做可复验的检查，输出有明确错误代码、脱敏 Trace 和长度上限。不允许把远程 MCP 返回文本当成系统指令。
 
-### P07 — Deep Research
+**实现次序**：P05-A Registry/Executor → P05-B 单个只读 MCP Server/失败处理 → P05-C Skill Parser/Tool → P05-D 权限与直接受影响的 Agent Tool Calling 测试。
 
-目标：第一个完整复杂业务闭环。
-实现：Web Search + Fetch Tool（只采用一个可验证的检索供应商，通过 Adapter 隔离）；Research Skill；多轮检索和来源去重；Sub-Agent 辅助研究；报告模板、引用与 Markdown Artifact。
-局部测试：Research 新增工具及固定研究问题；至少一次真实来源搜索并人工检查主要引用。
-参考：`skills/public/deep-research/SKILL.md`、上游 Task Tool。
-不做：无限抓取、证据不足时硬生成权威结论。
+**局部验收**：不改 Lead Agent 的核心循环即可注册一个新的 MCP Tool 与一个 Skill；连通实际可用的只读 MCP Server 或如实说明环境无法连接；工具不可通过 Skill/委派绕过授权。仅测对应的 registry/mcp/skills 测试及直接 Tool 集成。
 
-### P08 — 多文档 RAG
+**DeerFlow 参考**：\`backend/packages/harness/deerflow/tools/tools.py\`、\`mcp/tools.py\`、\`skills/parser.py\`、\`skills/tool_policy.py\`、\`agents/middlewares/skill_activation_middleware.py\`，所有均位于 \`backend/packages/harness/deerflow/\` 根下。
 
-目标：支持至少两份真实文档的索引、检索、跨文档问题与引用。
-实现：Docling 解析、Chunk/来源位置、Embedding、Chroma 本地索引；统一 `search_knowledge` 工具；答复引用稳定证据 ID。先向量检索基线；复杂 Hybrid/Rerank 如无评测收益则不加。
-局部测试：本次 Parser、索引、查询、引用链路和少量有金标的 QA；解析失败和无证据拒答。
-参考：DeerFlow 的文件/工具/Skills 接口；RAG 内部独立实现。
-不做：PostgreSQL/pgvector、扫描件 OCR、百万文档支持。
+### P06 — 上下文压缩、预算、取消与恢复边界
 
-### P09 — 发布与真实演示
+**业务链**：Run 启动时设置模型/工具/时间预算 → 每次调用前后记录用量 → 长工具输出进入 Artifact，仅把短摘要/ID 注入消息 → 接近上下文限制时压缩旧消息并保护用户目标、Todo、引用与文件 ID → 任务结束时准确结算 Run；取消或服务重启走独立的 Runtime 状态逻辑。**上下文压缩不替代 Checkpoint，Checkpoint 不替代 RunService。**
 
-目标：形成求职可展示的完整应用。
-实现：Web 任务进度与文件体验完善、Docker Compose 单机运行、README 实际操作、成本/Token 记录、简单评测脚本、源码归属。
-局部测试：P09 新增部署/界面，以及三条完整业务 Demo（Research、RAG、文件任务）。**不自动运行历史全部测试**；是否做全量套件另由用户决定。
-验收：真实产物可访问，日志/模型/版本/失败限制可核对，不伪造测试数字。
-参考：上游 Web 组件与 Runtime 契约。
+| 新增/修改文件 | 编码必须完成的具体内容 |
+| --- | --- |
+| \`runtime/budget.py\` | \`RunBudget(max_steps,max_tool_calls,max_seconds,max_input_tokens_estimate)\`；\`BudgetTracker.before_model/before_tool/record_usage\`，触发上限后返回 \`BUDGET_EXCEEDED\` 与统计。估算 token 与提供方真实 usage 分开标记，禁止把估算说成实际账单。 |
+| \`agents/context.py\` | \`ContextManager.prepare(messages,todos,refs,budget)\`：保留最近交互和关键用户约束；将旧消息摘要化，必要时调用已配置模型进行 summary；保护当前 Todo、真实 source_ids、artifact_ids，不丢失未完成步骤。 |
+| \`agents/middleware.py\` | 通过官方 \`AgentMiddleware\` 或当前 \`create_agent\` 支持的中间件装配预算、工具输出长度、异常转换、摘要策略；**不重新实现模型/工具循环**。对支持的官方 Middleware 优先直接配置，仅对缺少的行为实现小型自定义包装。 |
+| \`runtime/usage.py\` | \`UsageRecord(run_id,task_id?,model,input_tokens?,output_tokens?,estimated)\`，统计模型/子任务/工具耗时；缺失供应商 usage 时保留 unknown/estimated 标志，不虚构 0 成本。 |
+| \`runtime/runner.py\`（修改） | 添加取消信号（\`asyncio.Event\` 或等价）与 \`request_cancel(run_id)\`；新工具执行前检查取消；已经开始的外部副作用不能假定立即停止或自动撤销；按真实结果写终态。 |
+| \`runtime/repository.py\`（修改） | 增加 \`CANCELLING\`、\`INTERRUPTED/UNKNOWN\` 状态需要时迁移；启动时检查旧 RUNNING 并标记 \`INTERRUPTED/UNKNOWN\`，不自动重新执行未知副作用动作。 |
+| \`api/runs.py\`（修改） | \`POST /api/runs/{run_id}/cancel\`：幂等请求，返回当前真实状态；已终结 Run 不重新启动。 |
+| \`tests/test_budget.py\`、\`tests/test_context.py\`、\`tests/test_cancel_recovery.py\` | 超限停止、摘要保护、真实/估算区分、取消后不启动新工具、服务重启孤儿标记和外部写工具 UNKNOWN 不被盲重试。 |
+
+**算法/约束固定**：
+- 每 Run 默认 \`max_steps=40\`、\`max_tool_calls=30\`、\`max_seconds=600\`（可在配置中调整），保护系统不进入无限循环。模型使用量若不支持精确记录，标 \`estimated\`。
+- 工具结果文本超过建议阈值 12 KB 时存入 Artifact 并给模型短摘要和引用 ID；裁剪不能破坏引用可定位性。
+- ContextManager 只摘要较旧、已完成的交互；当前用户指令、尚未完成 Todo、关键证据/文件 ID 以结构化方式单独注入；摘要失败则按预算安全退出，不能静默丢上下文后继续。
+- 重启时只恢复已经落盘的 Thread/Graph 数据与标记 Run，**不自动恢复进程内并发 Sub-Agent**；有副作用操作的结果 UNKNOWN 不重试。
+- 对同一个 run_id 重复 cancel 应返回确定状态；若仍在调用外部工具，显示 CANCELLING/UNKNOWN 而不是提前声称 CANCELLED。
+
+**实现次序**：P06-A Budget/Usage → P06-B Summary + Tool Output → P06-C Cancel/Restart 核查 → P06-D 局部故障注入。测试只测当前 Budget/Context/Runner/API 的直接影响，不重跑 Research/RAG 全量评测。
+
+**DeerFlow 参考**：\`agents/middlewares/summarization_middleware.py\`、\`tool_output_budget_middleware.py\`、\`loop_detection_middleware.py\`、\`runtime/runs/manager.py\`、\`runtime/runs/worker.py\`（均在 Harness 根下）。
+
+### P07 — Deep Research 的完整业务实现
+
+**业务链**：用户给出研究题 → Lead 加载 \`deep-research\` Skill → Todo 分主题 → \`search_web\` 检索 → \`fetch_webpage\` 获取页面内容 → Sub-Agent 做独立分析 → \`EvidenceStore\` 汇总真实来源 → \`ReportWriter\` 输出 Markdown Artifact → 用户下载。**不重写一套固定 Deep Research Graph**，复用既有 Lead + Task + Tools + Skills。
+
+**联网供应商固定**：首选 **Tavily Search API** 作为单一搜索适配器；通过 \`TAVILY_API_KEY\` 环境变量配置，搜索结果必须携带真实 URL、标题、片段。若账户不可用，任务标记外部依赖阻塞并告知用户，不由 Codex 擅自扩展为多个搜索框架。网页正文抓取走受限 \`httpx\`，只允许 http/https，限制大小/时长/重定向，并显式防 SSRF（拒绝 loopback、私有、链路本地地址和 DNS 重绑定风险）。不必自行编写复杂浏览器自动化。
+
+| 新增/修改文件 | 编码必须完成的具体内容 |
+| --- | --- |
+| \`research/models.py\` | \`ResearchRequest(topic,scope?,report_format)\`、\`SearchHit(title,url,snippet,retrieved_at)\`、\`EvidenceRecord(id,url,excerpt,source_status)\`、\`ResearchReport(markdown,source_ids,artifact_id)\`；来源未访问/抓取失败必须标注状态。 |
+| \`research/search.py\` | \`TavilySearchProvider.search(query,max_results=5)\`：调用当前 Tavily SDK/HTTP API，转换为 SearchHit；过滤空 URL、去重、限制单次结果数；保留查询与检索时间及错误类别。 |
+| \`research/fetch.py\` | \`fetch_webpage(url)\`：\`httpx.AsyncClient\` 有界超时、响应大小、Content-Type 与 SSRF/跳转检查；提取可阅读的网页文本并截断，不允许读取内网或本地文件。仅 HTTP 标题/摘要不足时明确“正文未核验”。 |
+| \`research/evidence.py\` | \`EvidenceStore.add/list/get\`：保存 search/fetch 工具真实返回的 URL、片段、检索时间、状态及来源 ID；相同 URL 规范化去重。严禁模型自己生成新的“已检索来源”ID。 |
+| \`research/report.py\` | \`render_markdown_report(title,findings,evidence_ids,limitations)\`：生成标题、研究方法、核心结论、对比、局限与来源清单；引用只能指向 EvidenceStore 中已经存在且满足引用条件的记录。将最终文本通过 P03 Workspace 保存为 Artifact。 |
+| \`tools/research_tools.py\` | \`search_web\`、\`fetch_webpage\`、\`save_research_report\` 包装上述服务，加入 Registry 并声明超时/权限；工具的大返回内容存 Artifact/证据而非无限推给模型。 |
+| \`skills/public/deep-research/SKILL.md\` | 明确输入、计划、分主题、搜索→核对、反向检索、合并、引用与停止标准；要求事实区分 verified/unverified，输出本项目支持的 Markdown 报告。 |
+| \`frontend/src/components/ResearchReport.tsx\` | 展示报告、来源链接、无法验证提示和下载按钮；复用 P02 流事件、P03 Artifact API。 |
+| \`tests/test_research_search.py\`、\`test_research_evidence.py\`、\`test_research_report.py\` | Mock 搜索结果转换、URL 去重、抓取失败、SSRF、虚假引用被拒绝、报告实际生成与 Artifact 下载。 |
+
+**固定研究策略**：先由 Lead 评估问题范围，复杂任务创建 Todo；单个问题默认搜索不超过 5 条候选结果，每个 Run 总工具/Token/时间预算继承 P06；多个研究方向可由 P04 允许的 Research 子 Agent 并行检索；子 Agent 回传 **Findings + Evidence IDs + Missing** 而非全量网页文本。报告中没有真实证据的主张不得以确定性语气编成引用。只依靠搜索摘要的结论必须标记摘要级来源，不当作已精读正文。
+
+**实现次序**：P07-A 搜索与抓取 → P07-B Evidence/引文 ID → P07-C Research Skill + 子任务报告 → P07-D UI 和一个真实网络 Smoke。测试只跑本次 research tests 和直接使用的 Tool/Artifact 接口，真实模型报告人工抽查主要来源。
+
+**DeerFlow 参考**：\`skills/public/deep-research/SKILL.md\`、\`skills/public/systematic-literature-review/SKILL.md\`、\`backend/packages/harness/deerflow/tools/builtins/task_tool.py\`。Skill 负责工作方法而不是替代实际搜索工具。
+
+### P08 — Docling + Chroma 多文档 RAG
+
+**业务链**：用户从 P03 上传 PDF/Markdown/TXT → \`DocumentService\` 识别格式并调用 Parser → 保留真实页码/章节/文本结构 → Chunk → Embedding → Chroma 本地索引 → \`search_knowledge(scope,query,top_k)\` 返回真实 Evidence → Lead 生成带证据 ID 的回答；上传/解析失败或没有可用片段时拒答或标记不足。
+
+**Embedding 决策**：使用 \`langchain-openai.OpenAIEmbeddings\` 的一个经测试支持的服务（独立 \`EMBEDDING_MODEL\`、\`EMBEDDING_API_KEY\`、\`EMBEDDING_BASE_URL\` 配置，允许明确继承模型配置但不能假定 ChatModel 与 Embedding API 一致）；不用额外部署大型本地 Embedding 推理服务。调用失败则标记索引 FAILED，不写“已建库”。
+
+| 新增/修改文件 | 编码必须完成的具体内容 |
+| --- | --- |
+| \`knowledge/models.py\` | \`DocumentRecord(id,thread_id,filename,content_sha256,parser_version,index_status)\`；\`ChunkRecord(id,document_id,index_version,source_text,page?,section?,offset?)\`；\`KnowledgeHit(chunk_id,document_id,excerpt,page?,score)\`。页码无法可靠获得时为 null，不猜测。 |
+| \`knowledge/parser.py\` | \`parse_document(file_ref)->ParsedDocument\`：文本直接解码；PDF 使用 Docling \`DocumentConverter().convert(path)\`，检查转换状态，提取结构化文档、页码/章节与原文。使用结构元素/provenance 保留真实位置；不要仅 export_to_markdown 后通过正则假推页码。重型同步解析放入线程，不阻塞 Async API。 |
+| \`knowledge/chunker.py\` | \`chunk_document(parsed,max_chars=1200,overlap=150)\`：优先章节/段落边界，超长文本定长切片；产生稳定 \`chunk_id=hash(document_id,index_version,position,source_hash)\`，记录原文与真实位置。源文和用于召回的可选文本分开。 |
+| \`knowledge/embedding.py\` | \`EmbeddingProvider.embed_documents/embed_query\`：单一模型与 API 适配，控制 batch/超时，记录 embedding model/version/dim；不把用户文档写进日志。 |
+| \`knowledge/vector_store.py\` | \`ChromaIndex.upsert/delete_document/search\`：\`chromadb.PersistentClient\` 存 \`data/chroma\`，每条记录含 document_id、thread_id、chunk_id、index_version、page（可空时按驱动规则处理）；检索时强制使用 scope 过滤，返回 score/distance 的含义需准确声明。更新版本需先写新数据验证，再切换可见版本，不能混查新旧。 |
+| \`knowledge/service.py\` | \`ingest_document(file_id)\`：P03 受控读取→解析→分块→Embedding→Chroma upsert→索引状态 READY；失败写 FAILED 并清理不完整版本。 \`search_knowledge(thread_id,document_ids,query,top_k)\`：校验归属和索引版本，只返回实际检索到的原文片段与引用位置。 |
+| \`knowledge/repository.py\` | SQLite \`documents\`、\`index_versions\` 元数据，支持查看处理状态、重新建索引、删除过期索引；文件存储与 Chroma 不能假设有跨库事务，需要失败补偿。 |
+| \`tools/knowledge_tools.py\` | \`search_knowledge\` Tool Schema、scope 白名单和 Evidence ID，不允许模型给出任意用户路径；只允许当前 Thread 已授权文档。 |
+| \`api/knowledge.py\` | \`POST /api/threads/{id}/documents/{file_id}/index\`、\`GET /api/threads/{id}/documents\` 等最小接口（异步建索引可查询状态）；不能把耗时 Docling 解析直接堵塞事件循环。 |
+| \`frontend/src/components/DocumentPanel.tsx\` | 上传后索引按钮/状态、文档选择、可跳转的来源页码或片段；不承诺具备完整 PDF 阅读器。 |
+| \`tests/test_parser.py\`、\`test_chunker.py\`、\`test_vector_store.py\`、\`test_knowledge_api.py\` | 一份文本型 PDF/MD 解析、Chunk 位置一致性、索引检索、文档 Scope、无命中拒答、重建版本清理和失败恢复。 |
+
+**固定检索逻辑**：V1 先 \`top_k=5\` 向量检索，命中片段附 \`document_id/chunk_id/page/section\` 及证据 ID；无可靠页码时只引用文件和片段，不伪造 PDF 页码。答案只能引用真实返回的 Evidence ID，禁止把生成摘要或虚构元数据当作原文事实。暂不做 Hybrid/Rerank、多级知识图谱和复杂智能路由，后续需有独立评测收益才扩展。
+
+**实现次序**：P08-A Docling Parser/Chunk → P08-B Embedding/Chroma → P08-C Ingest/Search Tool 与引用 → P08-D 文档 UI 与局部金标 QA。只测 \`knowledge\` 当前模块及直接 Tool/API 消费者，不重跑 Deep Research 全套任务。
+
+**参考**：DeerFlow 的 Workspace/Tool/Skill 接入形式；RAG 内部是我们独立实现，不把其 \`deep-research/SKILL.md\` 当向量数据库实现。Docling 官方从 \`DocumentConverter\` 返回 \`ConversionResult\`，应检查 \`result.status\` 并利用 \`result.document\` 的 provenance 信息，具体 API 用锁定版本实测。
+
+### P09 — UI 完善、部署、定版评测与最终交付
+
+**业务链**：在干净开发机按 README 启动 FastAPI + React → Web 创建/继续 Thread → 运行一个真实 Research 任务并下载报告 → 上传至少两份真实文档做跨文档问答 → 用 Workspace 工具生成真实文件 → 展示任务状态/错误/局部指标。这个阶段交付真实演示和可重复测量，不引入全新大功能。
+
+| 新增/修改文件 | 编码必须完成的具体内容 |
+| --- | --- |
+| \`frontend/src/components/RunTimeline.tsx\` | 统一展示 Run 状态、Todo、Task、Tool 与 Artifact 事件，使用真实 EventEnvelope，不能从自然语言猜测进度。 |
+| \`frontend/src/App.tsx\`、\`frontend/src/api/client.ts\` | 整理已有组件和异常状态、断线后的 \`GET /api/runs/{id}\` 同步；不引入复杂全站状态库。 |
+| \`backend/src/minideerflow/core/logging.py\` | 统一 run_id/thread_id/task_id 的结构化摘要日志，敏感参数脱敏，不存 API Key、PDF 原文和私有响应。 |
+| \`eval/cases/research.json\`、\`eval/cases/rag.json\`、\`eval/cases/files.json\` | 小型固定任务集与人工检查要求；包含明确真实来源/文档范围或确定性输出标准，不填伪造成绩。 |
+| \`eval/run_eval.py\` | 调用本项目已有 API/Service 运行指定样本，记录 \`git_sha/model/config/dataset_version/latency/token_usage/error\` 与产物引用，原始结果写入 Git 忽略目录；报告标明无法运行和失败项。 |
+| \`Dockerfile\` / \`backend/Dockerfile\`、\`frontend/Dockerfile\`、\`compose.yaml\` | 两个服务的单机启动；映射 Python 数据卷和必需的环境变量，不硬编码 Key；容器非 root，API 默认不无认证暴露公网。根据真实依赖控制体积。 |
+| \`README.md\` | 安装、配置、PyCharm/终端启动、Docker、三条业务真实 Demo、已知局限和 DeerFlow 参考/源码许可；只列实际已实现功能。 |
+| \`tests/test_release_smoke.py\`、前端对应组件测试 | 只验证本次新增部署/时间线/日志/发布合同；另实际运行三条**完整最终 Demo**，属于交付阶段约定而非每阶段全量回归。 |
+
+**实施次序**：P09-A 前端体验/错误状态 → P09-B 定版样本和 Eval Runner → P09-C 单机 Docker/环境复现 → P09-D 三条真实 Demo、来源归属与安全复核。若没有模型/搜索/Embedding Key，明确将对应真实 Demo 标记 BLOCKED 或 NOT_RUN，不编造演示结果。
+
+**固定评测口径**：Research 报告中实际引用有效性与人工支持度；RAG 的 Hit@K、引用可定位率、无命中拒答；文件任务实际产物校验；记录调用次数、时间和 Token（提供方返回或标 estimated）。不用 LLM 自评冒充人工真值。实测数据不足时不强行给 P95 等指标下结论。
+
+**验收**：新环境可按 README 启动；三条演示分别拥有输入、脱敏 Run 记录、真实文件/引用、版本与失败说明；能证明工具限额、安全文件规则和外部不可用时的真实失败行为。最终是否执行全量历史 pytest/E2E 由用户另行决定，Codex 不自动扩大测试范围。
+
+**DeerFlow 参考**：\`frontend/src/components/workspace/\`、\`frontend/src/core/tasks/context.tsx\`、\`backend/packages/harness/deerflow/runtime/runs/manager.py\`；只参考事件/界面组织，不复制完整界面与复杂运行时。
 
 ## 6. Codex 执行规则：让本地 AI 用最少上下文开发
 
