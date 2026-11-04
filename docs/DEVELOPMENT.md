@@ -1,6 +1,6 @@
 # 开发方案、任务顺序与局部测试规则
 
-**方案版本**：v1.3 · 2026-11-04  
+**方案版本**：v1.4 · 2026-11-04  
 **当前状态**：设计确定；P00 尚未开始。各阶段真实进度独立记录在 `docs/progress/Pxx.md`，本文件只维护计划与执行规则。  
 **原则**：从零构建 Mini DeerFlow，逐步增加能力；一个阶段可以拆成多个很小的任务，但 Codex 每次只执行一个；用户审核后才能进入下一个阶段。
 
@@ -62,7 +62,7 @@ Codex 报告必须明确列出“本次改了什么 → 测了哪些 → 为什�
 
 ## 4. 固定的实现合同与文件规划（Codex 不得自行重设计）
 
-> 本节与后续 P00–P09 共同构成**编码实施规格书**。总体业务目标以 ARCHITECTURE.md 为准；本文件规定具体的文件、函数、输入输出与实现顺序。以下路径为正式目标，Python 代码全部相对 \`backend/src/minideerflow/\`，测试全部相对 \`backend/tests/\`，Web 文件相对 \`frontend/src/\`。**不要求 P00 一次建齐**；只在实现当前阶段时创建其文件。
+> 本节与后续 P00–P09 共同构成**编码实施规格书**。总体业务目标以 ARCHITECTURE.md 为准；本文件规定具体的文件、函数、输入输出与实现顺序。以下路径为正式目标，Python 代码全部相对 `backend/src/minideerflow/`，测试全部相对 `backend/tests/`，Web 文件相对 `frontend/src/`。**不要求 P00 一次建齐**；只在实现当前阶段时创建其文件。
 
 ### 4.1 开发责任边界
 
@@ -77,26 +77,26 @@ Codex 报告必须明确列出“本次改了什么 → 测了哪些 → 为什�
 
 | 对象 | 必须有的字段或方法 | 约束 |
 | --- | --- | --- |
-| \`Thread\` | \`id, title, created_at, updated_at\` | 仅会话身份；不当成一次执行 |
-| \`Run\` | \`id, thread_id, status, started_at, finished_at, error_code\` | 一次请求；服务端终态是真实来源 |
-| \`AgentState\` | \`messages\`，P04 新增 \`todos\`，后续只存 artifact/evidence ID | 使用 LangGraph/LangChain state，不能无限堆子任务文本 |
-| \`TaskRecord\` | \`task_id, run_id, kind, status, result_ref, error\` | 与父图状态独立；首次在内存执行，不宣称跨进程恢复 |
-| \`ToolResult\` | \`ok, content, error_code?, artifact_ids?, source_ids?\` | 错误/副作用未知另有执行元数据；禁止工具只返回无法解析的异常文字 |
-| \`Artifact\` | \`id, thread_id, run_id?, name, path_internal, size, sha256\` | 外部只能传 artifact_id 或虚拟路径 |
-| \`Evidence\` | \`id, source_type, url_or_document_id, location, excerpt\` | 只有真实抓取/解析获得的才能标来源 |
-| \`RunEvent\` | \`event_id, run_id, thread_id, type, timestamp, payload, task_id?\` | SSE 实时展示；服务端 Run 状态最终裁决 |
-| \`SkillMeta\` | \`name, description, path, allowed_tools?\` | SKILL.md 指令不能绕过执行权限 |
+| `Thread` | `id, title, created_at, updated_at` | 仅会话身份；不当成一次执行 |
+| `Run` | `id, thread_id, status, started_at, finished_at, error_code` | 一次请求；服务端终态是真实来源 |
+| `AgentState` | `messages`，P04 新增 `todos`，后续只存 artifact/evidence ID | 使用 LangGraph/LangChain state，不能无限堆子任务文本 |
+| `TaskRecord` | `task_id, run_id, kind, status, result_ref, error` | 与父图状态独立；首次在内存执行，不宣称跨进程恢复 |
+| `ToolResult` | `ok, content, error_code?, artifact_ids?, source_ids?` | 错误/副作用未知另有执行元数据；禁止工具只返回无法解析的异常文字 |
+| `Artifact` | `id, thread_id, run_id?, name, path_internal, size, sha256` | 外部只能传 artifact_id 或虚拟路径 |
+| `Evidence` | `id, source_type, url_or_document_id, location, excerpt` | 只有真实抓取/解析获得的才能标来源 |
+| `RunEvent` | `event_id, run_id, thread_id, type, timestamp, payload, task_id?` | SSE 实时展示；服务端 Run 状态最终裁决 |
+| `SkillMeta` | `name, description, path, allowed_tools?` | SKILL.md 指令不能绕过执行权限 |
 
-统一 API 前缀 \`/api\`；P02 规定 \`POST /api/threads\`、\`GET /api/threads\`、\`POST /api/threads/{thread_id}/runs\`、\`GET /api/runs/{run_id}\`、\`GET /api/runs/{run_id}/events\`。P03 增加上传、文件列表与产物下载，P06 补完善取消。新增字段只能在真实阶段实现，不得在 P00 把所有领域模型先空建一遍。
+统一 API 前缀 `/api`；P02 规定 `POST /api/threads`、`GET /api/threads`、`POST /api/threads/{thread_id}/runs`、`GET /api/runs/{run_id}`、`GET /api/runs/{run_id}/events`。P03 增加上传、文件列表与产物下载，P06 补完善取消。新增字段只能在真实阶段实现，不得在 P00 把所有领域模型先空建一遍。
 
 ### 4.3 一致的工程约定
 
-1. 后端包名永远是 \`minideerflow\`；包内目录按 \`api/\`、\`core/\`、\`agents/\`、\`tools/\`、\`runtime/\`、\`workspace/\`、\`research/\`、\`knowledge/\` 逐步生成。API 不执行底层 SQL，也不直接读取用户上传路径；Harness 通过注入 Tool/Service 获取业务能力。
-2. Async 优先：FastAPI 异步路由、LangChain \`ainvoke/astream\`、受控协程任务；阻塞型 PDF 解析/CPU 操作应放线程而不是阻塞事件循环。首版只运行一个应用 Worker。
-3. ModelProvider 统一首选 \`langchain-openai\` 中 \`ChatOpenAI\`，通过 \`MODEL_NAME\`、\`MODEL_API_KEY\`、\`MODEL_BASE_URL\` 配置，当前只保证**一个经 P01 实测支持工具调用的提供方**；其它“OpenAI 兼容”服务不自动宣称都支持 Tool Calling。
-4. 时间均用 UTC ISO-8601，ID 用 UUID 字符串。SQLite 业务库 \`data/runtime.sqlite3\`，Checkpoint 可使用单独 \`data/checkpoints.sqlite3\`；目录属于 Git 忽略内容，路径通过配置统一传入。**所有状态迁移由 Runtime 服务写入，不由前端或模型文本推测。**
-5. 局部测试文件名 \`test_<module>.py\` 对应被修改模块；跨接口改动才补直接消费者测试。Mock 与真实云端 Smoke 分开，不因一个阶段完成自动跑全套 E2E。
-6. 参考上游一律基于 \`https://github.com/bytedance/deer-flow/blob/v2.0.0/\` 的具体源码路径；**参考调用链与不变量，不复制整仓，也不把上游源码全文输入 Codex**。
+1. 后端包名永远是 `minideerflow`；包内目录按 `api/`、`core/`、`agents/`、`tools/`、`runtime/`、`workspace/`、`research/`、`knowledge/` 逐步生成。API 不执行底层 SQL，也不直接读取用户上传路径；Harness 通过注入 Tool/Service 获取业务能力。
+2. Async 优先：FastAPI 异步路由、LangChain `ainvoke/astream`、受控协程任务；阻塞型 PDF 解析/CPU 操作应放线程而不是阻塞事件循环。首版只运行一个应用 Worker。
+3. ModelProvider 统一首选 `langchain-openai` 中 `ChatOpenAI`，通过 `MODEL_NAME`、`MODEL_API_KEY`、`MODEL_BASE_URL` 配置，当前只保证**一个经 P01 实测支持工具调用的提供方**；其它“OpenAI 兼容”服务不自动宣称都支持 Tool Calling。
+4. 时间均用 UTC ISO-8601，ID 用 UUID 字符串。SQLite 业务库 `data/runtime.sqlite3`，Checkpoint 可使用单独 `data/checkpoints.sqlite3`；目录属于 Git 忽略内容，路径通过配置统一传入。**所有状态迁移由 Runtime 服务写入，不由前端或模型文本推测。**
+5. 局部测试文件名 `test_<module>.py` 对应被修改模块；跨接口改动才补直接消费者测试。Mock 与真实云端 Smoke 分开，不因一个阶段完成自动跑全套 E2E。
+6. 参考上游一律基于 `https://github.com/bytedance/deer-flow/blob/v2.0.0/` 的具体源码路径；**参考调用链与不变量，不复制整仓，也不把上游源码全文输入 Codex**。
 
 ## 5. 每阶段逐文件实施规格（先做本阶段，审查后继续）
 
@@ -144,6 +144,25 @@ Agent/
 ~~~
 
 虚拟环境由 uv 管理，放在 backend/.venv 并忽略提交。config.py 只放必要配置，如果最终没有值得独立的配置逻辑，可以在代码审核中简化。不要提前创建空的 agents、subagents、tools、mcp、skills、runtime、knowledge、frontend 等模块。
+
+#### P00.2a 固定文件职责与核心函数
+
+| 文件 | 具体实现 | 不做 |
+| --- | --- | --- |
+| `backend/pyproject.toml` | 项目名 `mini-deerflow`、`requires-python = ">=3.12,<3.13"`、FastAPI/Uvicorn/实际使用的配置依赖、dev group pytest/httpx/ruff；配置 `src` 包发现。 | 未使用的 Agent/MCP/DB 依赖 |
+| `backend/.python-version` | 写 `3.12`，不改变系统级 Python。 | 锁死系统解释器 |
+| `backend/uv.lock` | `uv lock` 或 `uv sync` 真实生成并提交，不手写。 | 伪造兼容版本 |
+| `backend/src/minideerflow/__init__.py` | 极简包标识，导入不能触发数据库/模型连接。 | 额外初始化 |
+| `backend/src/minideerflow/main.py` | `app = FastAPI()`，实现 `GET /health` 返回 `{"status":"ok"}`、HTTP 200；不依赖模型 Key。 | `/runs`、SSE、后台 Worker |
+| `backend/src/minideerflow/config.py` | `Settings(app_env="development", log_level="INFO")` 和 `get_settings()`，延迟读取环境、允许测试覆盖；若不需要复杂校验可简化。 | 未来模块的空配置 |
+| `backend/tests/test_health.py` | TestClient 校验 `/health` 状态与 JSON，缺模型 Key 仍成功。 | 外部网络与业务测试 |
+| `backend/tests/test_config.py` | 如实现配置校验，测默认与无效字段；否则不为凑文件硬写。 | 无意义测试 |
+| `.env.example` | `APP_ENV=development`、`LOG_LEVEL=INFO` 等非秘密示例。 | 真实密钥 |
+| `.gitignore` | 忽略 `.env`、`.venv`、Python/pytest/ruff 缓存、`data/`、必要 IDE 私有配置；不忽略 `uv.lock`。 | 忽略源代码 |
+| `README.md` | 经验证的 `uv sync`、运行 Uvicorn、pytest、ruff、PyCharm 解释器 `backend/.venv/bin/python` 配置。 | 宣称 P01 能力 |
+| `docs/progress/P00.md` | 当前日期、实际修改、测试命令/结果、未运行项、Commit SHA、待审核状态。 | 重复复制计划 |
+
+保持 `/health` 实现短小直接；不为了未来扩展构建多层工厂、异步任务框架和空模块。
 
 #### P00.3 依赖与版本管理
 
@@ -230,120 +249,120 @@ Git 提交例：chore: bootstrap minimal FastAPI backend with uv。只能提交�
 
 ### P01 — 最小可运行 Agent（Model → Tool → Model）
 
-**业务链**：用户给出文本 → \`LeadAgent\` 收到消息 → 模型自行决定直接答复或调用 \`calculate\` → 工具执行 → ToolMessage 回模型 → 返回答复。此阶段 CLI 验证即可，不加 Thread/Run/数据库。
+**业务链**：用户给出文本 → `LeadAgent` 收到消息 → 模型自行决定直接答复或调用 `calculate` → 工具执行 → ToolMessage 回模型 → 返回答复。此阶段 CLI 验证即可，不加 Thread/Run/数据库。
 
-**固定技术**：\`langchain\`（\`create_agent\`）、\`langchain-openai\`（\`ChatOpenAI\`）、LangGraph 由 Agent 内部使用；不要自己画固定 Planner/Executor 图。使用环境变量 \`MODEL_NAME\`、\`MODEL_API_KEY\`、\`MODEL_BASE_URL\`。模型不支持 Tool Calling 则 Smoke 标记 BLOCKED，不能假装工具运行成功。
+**固定技术**：`langchain`（`create_agent`）、`langchain-openai`（`ChatOpenAI`）、LangGraph 由 Agent 内部使用；不要自己画固定 Planner/Executor 图。使用环境变量 `MODEL_NAME`、`MODEL_API_KEY`、`MODEL_BASE_URL`。模型不支持 Tool Calling 则 Smoke 标记 BLOCKED，不能假装工具运行成功。
 
 | 新增/修改文件 | 编码必须完成的具体内容 |
 | --- | --- |
-| \`core/model.py\` | \`build_chat_model(settings) -> BaseChatModel\`。只负责配置 \`ChatOpenAI\`（model/key/base_url/timeout）；缺 key 或 model 时抛出可读配置错误；不在 import 阶段读取/连接模型。 |
-| \`agents/lead.py\` | \`build_lead_agent(model, tools, checkpointer=None)\`：调用 \`langchain.agents.create_agent\`，配置简短系统提示、工具集合与可选 Checkpointer；返回框架可运行 Agent，不手写第二套 Agent 循环。 |
-| \`tools/calculator.py\` | \`calculate(expression: str)\`：只允许数字、小数、四则、括号、有限一元正负，使用显式 AST 白名单解析，**禁止 eval、exec 与任意函数调用**。结果为字符串或结构化 ToolResult；非法表达式返回确定性错误。 |
-| \`cli.py\` | 从终端读取一个输入，构造模型与工具，\`agent.ainvoke({"messages":[...]})\`，输出最终 assistant 内容；隐藏 key，错误返回非零退出码。 |
-| \`core/config.py\` | 基于 P00 配置对象增补模型参数与校验，保留无模型 Key 仍可运行 \`/health\` 的性质；只有调用 Agent 时才必须提供密钥。 |
-| \`tests/test_calculator.py\` | 正常算式、除零、非法字符、函数调用、超长表达式。 |
-| \`tests/test_lead.py\` | Mock ChatModel 验证一次无工具回答和一次 Tool Call/ToolMessage 循环；不依赖网络。 |
-| \`README.md\` | 加入仅 P01 实际成功验证过的 CLI 用法与模型配置，不声称尚未实现 Web。 |
+| `core/model.py` | `build_chat_model(settings) -> BaseChatModel`。只负责配置 `ChatOpenAI`（model/key/base_url/timeout）；缺 key 或 model 时抛出可读配置错误；不在 import 阶段读取/连接模型。 |
+| `agents/lead.py` | `build_lead_agent(model, tools, checkpointer=None)`：调用 `langchain.agents.create_agent`，配置简短系统提示、工具集合与可选 Checkpointer；返回框架可运行 Agent，不手写第二套 Agent 循环。 |
+| `tools/calculator.py` | `calculate(expression: str)`：只允许数字、小数、四则、括号、有限一元正负，使用显式 AST 白名单解析，**禁止 eval、exec 与任意函数调用**。结果为字符串或结构化 ToolResult；非法表达式返回确定性错误。 |
+| `cli.py` | 从终端读取一个输入，构造模型与工具，`agent.ainvoke({"messages":[...]})`，输出最终 assistant 内容；隐藏 key，错误返回非零退出码。 |
+| `core/config.py` | 基于 P00 配置对象增补模型参数与校验，保留无模型 Key 仍可运行 `/health` 的性质；只有调用 Agent 时才必须提供密钥。 |
+| `tests/test_calculator.py` | 正常算式、除零、非法字符、函数调用、超长表达式。 |
+| `tests/test_lead.py` | Mock ChatModel 验证一次无工具回答和一次 Tool Call/ToolMessage 循环；不依赖网络。 |
+| `README.md` | 加入仅 P01 实际成功验证过的 CLI 用法与模型配置，不声称尚未实现 Web。 |
 
 **实现次序**：P01-A 添加 ModelFactory 与一个工具 → P01-B build_lead_agent/CLI 与 Mock 测试 → P01-C 有真实 Key 时做一次合法 Tool Calling Smoke。按 P01-A、B、C 小任务逐个交付，不得一次性引入 MCP 或 Sub-Agent。
 
-**局部验收**：实际看到模型产生的 \`tool_call\`、工具执行结果和最终答复；\`uv run pytest tests/test_calculator.py tests/test_lead.py\`，以及受影响的 config 测试。健康检查没有因新增配置被破坏时只补直接受影响测试。**P01 代码接口的 Tool 类型/Agent 构造以已安装依赖的实际签名为准，必要的兼容修正须报告，不授权改变架构。**
+**局部验收**：实际看到模型产生的 `tool_call`、工具执行结果和最终答复；`uv run pytest tests/test_calculator.py tests/test_lead.py`，以及受影响的 config 测试。健康检查没有因新增配置被破坏时只补直接受影响测试。**P01 代码接口的 Tool 类型/Agent 构造以已安装依赖的实际签名为准，必要的兼容修正须报告，不授权改变架构。**
 
-**DeerFlow 参考**：\`backend/packages/harness/deerflow/agents/factory.py\`、\`agents/lead_agent/agent.py\`（两路径均以前缀 \`backend/packages/harness/deerflow/\` 为根）。
+**DeerFlow 参考**：`backend/packages/harness/deerflow/agents/factory.py`、`agents/lead_agent/agent.py`（两路径均以前缀 `backend/packages/harness/deerflow/` 为根）。
 
 ### P02 — Thread / Run / SQLite Checkpoint / SSE / 极简 Web
 
-**业务链**：浏览器创建 Thread → POST Run 获取 run_id → 后端在受管任务中运行 \`lead_agent.astream\` → 发布 SSE token/tool/status → SQLite 持久化图历史及 Run 终态 → 浏览器查看对话。**API 不能直接在 HTTP 请求内等待整个长任务结束。**
+**业务链**：浏览器创建 Thread → POST Run 获取 run_id → 后端在受管任务中运行 `lead_agent.astream` → 发布 SSE token/tool/status → SQLite 持久化图历史及 Run 终态 → 浏览器查看对话。**API 不能直接在 HTTP 请求内等待整个长任务结束。**
 
 | 新增/修改文件 | 编码必须完成的具体内容 |
 | --- | --- |
-| \`runtime/models.py\` | Pydantic \`ThreadDto\`、\`RunDto\`、\`RunStatus\`、\`EventEnvelope\`；明确 CREATED/RUNNING/SUCCEEDED/FAILED/CANCELLED 状态；ID 为 UUID。 |
-| \`runtime/db.py\` | SQLite 数据源初始化及关闭（\`aiosqlite\` 或等价，应用 lifespan 托管）；建 \`threads\` / \`runs\` 最小表，独立于 Checkpointer。SQLite 写入序列化，避免并发事务锁冲突。 |
-| \`runtime/repository.py\` | \`create_thread/list_threads/get_thread/create_run/get_run/transition_run\`；终态不能重新 RUNNING，同一 Thread 不能有两个运行中的 Run。用 SQLite 事务保证检查/写入在同一并发边界。 |
-| \`runtime/checkpoints.py\` | 单独创建、关闭 \`AsyncSqliteSaver\`（来自经验证的 \`langgraph-checkpoint-sqlite\`），以 \`thread_id\` 配置 \`configurable\`，把 saver 注入 P01 Agent 工厂；启动/关闭绑定 FastAPI lifespan。 |
-| \`runtime/events.py\` | \`EventBus.publish(run_id,event)\` 和 \`subscribe(run_id)\`；Run 内事件序号递增，用有界内存环形缓冲区解决 POST Run 之后才连接 SSE 导致的初始事件丢失；不承诺持久历史回放。消费者慢时有明确 buffer/丢失策略。 |
-| \`runtime/runner.py\` | \`start_run(thread_id, text)\` 创建 Run、管理后台 asyncio Task，使用 \`agent.astream\` 归一化消息/工具事件；在 \`try/except/finally\` 中准确写入终态并发布对应事件，模型说“完成了”不能当作 SUCCEEDED。 |
-| \`api/threads.py\` | \`POST /api/threads\`、\`GET /api/threads\`；只调用 repository，不导入图或模型逻辑。 |
-| \`api/runs.py\` | \`POST /api/threads/{thread_id}/runs\` 返回 run_id；\`GET /api/runs/{run_id}\` 查询服务端状态；\`GET /api/runs/{run_id}/events\` 使用 \`text/event-stream\` SSE。 |
-| \`main.py\` | 保留 P00 /health，在 lifespan 中创建/关闭 Runner、SQLite、Checkpointer、事件服务并 include_router；默认只在 localhost、单 worker。 |
-| \`frontend/package.json\`、\`frontend/src/main.tsx\` | 使用 Vite + React + TypeScript 建最小 Web 入口；不引入 Next.js、Redux、复杂 UI 设计系统。 |
-| \`frontend/src/api/client.ts\` | \`createThread/startRun/getRun\`，\`subscribeRunEvents\` 统一封装 HTTP/SSE 处理（POST 和 GET 为两个请求）。 |
-| \`frontend/src/App.tsx\` | 最小聊天输入/消息列表/等待状态；按实际 RunEvent 更新流式显示，最终以 \`GET /api/runs/{id}\` 为状态权威。 |
-| \`tests/test_runtime.py\`、\`tests/test_runs_api.py\` | Thread/Run 状态迁移、互斥、Graph Checkpoint 读写、SSE 事件顺序、Agent 失败不报成功；Mock 模型运行即可。 |
+| `runtime/models.py` | Pydantic `ThreadDto`、`RunDto`、`RunStatus`、`EventEnvelope`；明确 CREATED/RUNNING/SUCCEEDED/FAILED/CANCELLED 状态；ID 为 UUID。 |
+| `runtime/db.py` | SQLite 数据源初始化及关闭（`aiosqlite` 或等价，应用 lifespan 托管）；建 `threads` / `runs` 最小表，独立于 Checkpointer。SQLite 写入序列化，避免并发事务锁冲突。 |
+| `runtime/repository.py` | `create_thread/list_threads/get_thread/create_run/get_run/transition_run`；终态不能重新 RUNNING，同一 Thread 不能有两个运行中的 Run。用 SQLite 事务保证检查/写入在同一并发边界。 |
+| `runtime/checkpoints.py` | 单独创建、关闭 `AsyncSqliteSaver`（来自经验证的 `langgraph-checkpoint-sqlite`），以 `thread_id` 配置 `configurable`，把 saver 注入 P01 Agent 工厂；启动/关闭绑定 FastAPI lifespan。 |
+| `runtime/events.py` | `EventBus.publish(run_id,event)` 和 `subscribe(run_id)`；Run 内事件序号递增，用有界内存环形缓冲区解决 POST Run 之后才连接 SSE 导致的初始事件丢失；不承诺持久历史回放。消费者慢时有明确 buffer/丢失策略。 |
+| `runtime/runner.py` | `start_run(thread_id, text)` 创建 Run、管理后台 asyncio Task，使用 `agent.astream` 归一化消息/工具事件；在 `try/except/finally` 中准确写入终态并发布对应事件，模型说“完成了”不能当作 SUCCEEDED。 |
+| `api/threads.py` | `POST /api/threads`、`GET /api/threads`；只调用 repository，不导入图或模型逻辑。 |
+| `api/runs.py` | `POST /api/threads/{thread_id}/runs` 返回 run_id；`GET /api/runs/{run_id}` 查询服务端状态；`GET /api/runs/{run_id}/events` 使用 `text/event-stream` SSE。 |
+| `main.py` | 保留 P00 /health，在 lifespan 中创建/关闭 Runner、SQLite、Checkpointer、事件服务并 include_router；默认只在 localhost、单 worker。 |
+| `frontend/package.json`、`frontend/src/main.tsx` | 使用 Vite + React + TypeScript 建最小 Web 入口；不引入 Next.js、Redux、复杂 UI 设计系统。 |
+| `frontend/src/api/client.ts` | `createThread/startRun/getRun`，`subscribeRunEvents` 统一封装 HTTP/SSE 处理（POST 和 GET 为两个请求）。 |
+| `frontend/src/App.tsx` | 最小聊天输入/消息列表/等待状态；按实际 RunEvent 更新流式显示，最终以 `GET /api/runs/{id}` 为状态权威。 |
+| `tests/test_runtime.py`、`tests/test_runs_api.py` | Thread/Run 状态迁移、互斥、Graph Checkpoint 读写、SSE 事件顺序、Agent 失败不报成功；Mock 模型运行即可。 |
 
-**确定性 API**：\`POST /api/threads\` 返回 \`thread_id\`；\`POST /api/threads/{id}/runs\` 接收 \`{"message":"..."}\` 返回 \`{"run_id":"...","status":"CREATED"}\` 或真实的初始状态；\`GET /api/runs/{id}\` 返回明确终态；SSE 每条有 \`event_id,run_id,thread_id,type,timestamp,payload,task_id?\`。事件不等于数据库交易记录，重连只能在**本次 Run 的保留窗口**回看；超出窗口时要求用户重新拉取 Run 状态，不得无条件承诺无损回放。
+**确定性 API**：`POST /api/threads` 返回 `thread_id`；`POST /api/threads/{id}/runs` 接收 `{"message":"..."}` 返回 `{"run_id":"...","status":"CREATED"}` 或真实的初始状态；`GET /api/runs/{id}` 返回明确终态；SSE 每条有 `event_id,run_id,thread_id,type,timestamp,payload,task_id?`。事件不等于数据库交易记录，重连只能在**本次 Run 的保留窗口**回看；超出窗口时要求用户重新拉取 Run 状态，不得无条件承诺无损回放。
 
 **实现次序**：P02-A Repository/Checkpointer → P02-B Runner/API/SSE → P02-C 前端薄聊天界面。若模型执行需要持久化长 Run，P02 先单进程托管任务，不引入 Redis/MQ。P06 再完善 Cancel 和崩溃后核查。
 
-**局部验收**：创建 Thread、Run、流式事件到终态；服务重启能读回历史 Checkpoint；事件不漏发订阅前的开始事件；同 Thread Run 冲突被拒绝；错误 Run 不显示完成。只测 \`tests/test_runtime.py\`、\`tests/test_runs_api.py\` 和当前 Web API 消费逻辑。
+**局部验收**：创建 Thread、Run、流式事件到终态；服务重启能读回历史 Checkpoint；事件不漏发订阅前的开始事件；同 Thread Run 冲突被拒绝；错误 Run 不显示完成。只测 `tests/test_runtime.py`、`tests/test_runs_api.py` 和当前 Web API 消费逻辑。
 
-**DeerFlow 参考**：\`runtime/runs/manager.py\`、\`runtime/runs/worker.py\`、\`runtime/checkpointer/async_provider.py\`、\`app/gateway/routers/runs.py\`（路径根据架构文档里的上游根目录定位）。
+**DeerFlow 参考**：`runtime/runs/manager.py`、`runtime/runs/worker.py`、`runtime/checkpointer/async_provider.py`、`app/gateway/routers/runs.py`（路径根据架构文档里的上游根目录定位）。
 
 ### P03 — Workspace、文件安全与 Artifact
 
-**业务链**：上传 → 获取 \`file_id\` → Agent 使用白名单文件工具读取/写出新文件 → 保存 \`artifact_id\` → 浏览器下载。文件数据进入 Thread 隔离目录，不进入 Git，不传宿主机绝对路径给 LLM。
+**业务链**：上传 → 获取 `file_id` → Agent 使用白名单文件工具读取/写出新文件 → 保存 `artifact_id` → 浏览器下载。文件数据进入 Thread 隔离目录，不进入 Git，不传宿主机绝对路径给 LLM。
 
 | 新增/修改文件 | 编码必须完成的具体内容 |
 | --- | --- |
-| \`workspace/models.py\` | FileRecord、ArtifactRecord、文件操作错误类型；文件记录包含 thread_id、run_id?、相对路径、sha256、size、mime、kind。 |
-| \`workspace/storage.py\` | \`save_upload/open_text/write_text/list_files/get_artifact\`：使用 \`data/workspaces/{thread_id}/\` 隔离，先校验归属和安全路径，原子写入、限制文件大小和类型；使用 no-follow/目录句柄或等价安全策略防符号链接/TOCTOU，而非只靠字符串前缀。 |
-| \`workspace/repository.py\` | SQLite 中新增 files/artifacts 表，记录来源、归属、文件大小与内部存储名，下载只能查登记过的 artifact_id。 |
-| \`tools/file_tools.py\` | \`list_files/read_text/write_text\` 三项工具；工具只能访问授予 Thread 的虚拟目录，不开放 Path 对象、绝对地址、Shell 或通用 Python 解释器。 |
-| \`api/files.py\` | \`POST /api/threads/{thread_id}/files\` 上传、\`GET /api/threads/{thread_id}/artifacts\` 列表、\`GET /api/artifacts/{artifact_id}\` 下载，校验文件归属和下载 MIME。 |
-| \`frontend/src/components/FilesPanel.tsx\` | 上传、文件列表、下载；请求失败/文件过大有明确提示。 |
-| \`tests/test_workspace.py\`、\`tests/test_files_api.py\` | 上传/读/写/下载、文件大小/路径穿越、符号链接、跨 Thread 访问、并发写冲突和失败清理。 |
+| `workspace/models.py` | FileRecord、ArtifactRecord、文件操作错误类型；文件记录包含 thread_id、run_id?、相对路径、sha256、size、mime、kind。 |
+| `workspace/storage.py` | `save_upload/open_text/write_text/list_files/get_artifact`：使用 `data/workspaces/{thread_id}/` 隔离，先校验归属和安全路径，原子写入、限制文件大小和类型；使用 no-follow/目录句柄或等价安全策略防符号链接/TOCTOU，而非只靠字符串前缀。 |
+| `workspace/repository.py` | SQLite 中新增 files/artifacts 表，记录来源、归属、文件大小与内部存储名，下载只能查登记过的 artifact_id。 |
+| `tools/file_tools.py` | `list_files/read_text/write_text` 三项工具；工具只能访问授予 Thread 的虚拟目录，不开放 Path 对象、绝对地址、Shell 或通用 Python 解释器。 |
+| `api/files.py` | `POST /api/threads/{thread_id}/files` 上传、`GET /api/threads/{thread_id}/artifacts` 列表、`GET /api/artifacts/{artifact_id}` 下载，校验文件归属和下载 MIME。 |
+| `frontend/src/components/FilesPanel.tsx` | 上传、文件列表、下载；请求失败/文件过大有明确提示。 |
+| `tests/test_workspace.py`、`tests/test_files_api.py` | 上传/读/写/下载、文件大小/路径穿越、符号链接、跨 Thread 访问、并发写冲突和失败清理。 |
 
-**关键实现固定**：初版只接受 \`.txt/.md/.csv/.json\` 等可安全解码的文本格式作为 \`read_text\`，PDF 只保存上传而不宣称可以读取（P08 才解析）。\`write_text\` 使用临时文件加原子替换，默认禁止覆盖已存在产物，返回 Artifact ID。单用户也要做 Thread 归属判断，因为工具不应跨会话访问。文件工具的权限必须在 Python 执行层检查。
+**关键实现固定**：初版只接受 `.txt/.md/.csv/.json` 等可安全解码的文本格式作为 `read_text`，PDF 只保存上传而不宣称可以读取（P08 才解析）。`write_text` 使用临时文件加原子替换，默认禁止覆盖已存在产物，返回 Artifact ID。单用户也要做 Thread 归属判断，因为工具不应跨会话访问。文件工具的权限必须在 Python 执行层检查。
 
 **实现次序**：P03-A Storage/路径安全 → P03-B Tool + SQLite Metadata/API → P03-C 文件面板及下载。局部测试只测新增文件链路和直接调用方，不重测所有 Agent。
 
-**DeerFlow 参考**：\`sandbox/security.py\`、\`sandbox/local/local_sandbox.py\`、\`app/gateway/routers/uploads.py\`。本地 Sandbox 不等于不可信命令安全沙箱，不复制 Host Bash。
+**DeerFlow 参考**：`sandbox/security.py`、`sandbox/local/local_sandbox.py`、`app/gateway/routers/uploads.py`。本地 Sandbox 不等于不可信命令安全沙箱，不复制 Host Bash。
 
 ### P04 — Todo 规划、任务委派与 Sub-Agent
 
-**业务链**：复杂目标 → 模型调用 \`write_todos\` 更新结构化计划 → \`task\` 工具指定角色和任务目标 → Dispatcher 限制并发、裁剪上下文、构造子 Agent → 子 Agent 调用允许的 Tool → 返回短摘要+证据/文件引用 → Lead 汇总。简单问题不需要强制规划。
+**业务链**：复杂目标 → 模型调用 `write_todos` 更新结构化计划 → `task` 工具指定角色和任务目标 → Dispatcher 限制并发、裁剪上下文、构造子 Agent → 子 Agent 调用允许的 Tool → 返回短摘要+证据/文件引用 → Lead 汇总。简单问题不需要强制规划。
 
 | 新增/修改文件 | 编码必须完成的具体内容 |
 | --- | --- |
-| \`agents/state.py\` | 基于实际 LangChain AgentState 扩展 \`todos\`；字段为 \`todo_id,title,status\`，合并规则必须保证更新同 ID 而非无限追加；并发更新先在父 Agent 串行归并。 |
-| \`tools/todo_tool.py\` | \`write_todos(items)\` 验证状态 \`pending/in_progress/completed\`、合法 ID 和一次更新数上限；写入真实 State 并发布 todo_updated，禁止只输出自然语言 Todo。 |
-| \`agents/subagents/config.py\` | 固定 general、research 两种 \`SubAgentSpec\`：name/system_prompt/allowed_tools/max_steps/timeout；初版禁止子 Agent 继续使用 task。 |
-| \`agents/subagents/dispatcher.py\` | \`dispatch(spec,input,parent_context)->TaskResult\`；\`asyncio.Semaphore(3)\` 限制每 Run 总并发；使用子代理独立 messages，不拷贝父完整聊天日志；工具集取父授权与角色 allowlist **交集**。 |
-| \`agents/subagents/executor.py\` | 使用 P01 Agent 工厂构建 child Agent，**不复用父 Checkpointer**（可设 False/None，以已锁版本实际语义为准），执行 asyncio 超时和错误归一；返回摘要、状态、证据/产物 ID，不能把完整子代理对话塞回父状态。 |
-| \`tools/task_tool.py\` | 模型可调用的 \`task(agent_type,description)\`，由当前 Runtime 注入 task_id/run_id/权限上下文，不读取随意的全局单例；返回可序列化任务摘要。 |
-| \`runtime/task_registry.py\` | 进程内 TaskRecord 生命周期 PENDING/RUNNING/COMPLETED/FAILED/CANCELLED/TIMED_OUT，输出对应 run 事件；默认无跨重启保证。 |
-| \`frontend/src/components/TodoPanel.tsx\`、\`TaskPanel.tsx\` | 按 todo_updated/subtask_* 更新视图；不靠模型文本判断子任务终态。 |
-| \`tests/test_todos.py\`、\`tests/test_subagents.py\` | 同 ID Todo 更新、非法转移、实际委派、角色权限、并发上限、超时、任务失败、父子 Checkpointer 隔离。 |
+| `agents/state.py` | 基于实际 LangChain AgentState 扩展 `todos`；字段为 `todo_id,title,status`，合并规则必须保证更新同 ID 而非无限追加；并发更新先在父 Agent 串行归并。 |
+| `tools/todo_tool.py` | `write_todos(items)` 验证状态 `pending/in_progress/completed`、合法 ID 和一次更新数上限；写入真实 State 并发布 todo_updated，禁止只输出自然语言 Todo。 |
+| `agents/subagents/config.py` | 固定 general、research 两种 `SubAgentSpec`：name/system_prompt/allowed_tools/max_steps/timeout；初版禁止子 Agent 继续使用 task。 |
+| `agents/subagents/dispatcher.py` | `dispatch(spec,input,parent_context)->TaskResult`；`asyncio.Semaphore(3)` 限制每 Run 总并发；使用子代理独立 messages，不拷贝父完整聊天日志；工具集取父授权与角色 allowlist **交集**。 |
+| `agents/subagents/executor.py` | 使用 P01 Agent 工厂构建 child Agent，**不复用父 Checkpointer**（可设 False/None，以已锁版本实际语义为准），执行 asyncio 超时和错误归一；返回摘要、状态、证据/产物 ID，不能把完整子代理对话塞回父状态。 |
+| `tools/task_tool.py` | 模型可调用的 `task(agent_type,description)`，由当前 Runtime 注入 task_id/run_id/权限上下文，不读取随意的全局单例；返回可序列化任务摘要。 |
+| `runtime/task_registry.py` | 进程内 TaskRecord 生命周期 PENDING/RUNNING/COMPLETED/FAILED/CANCELLED/TIMED_OUT，输出对应 run 事件；默认无跨重启保证。 |
+| `frontend/src/components/TodoPanel.tsx`、`TaskPanel.tsx` | 按 todo_updated/subtask_* 更新视图；不靠模型文本判断子任务终态。 |
+| `tests/test_todos.py`、`tests/test_subagents.py` | 同 ID Todo 更新、非法转移、实际委派、角色权限、并发上限、超时、任务失败、父子 Checkpointer 隔离。 |
 
-**默认约束**：\`MAX_SUBAGENT_CONCURRENCY=3\`、\`MAX_DELEGATION_DEPTH=1\`，每个子任务有 \`max_steps\` 和超时；子 Agent 默认只读 Workspace，写文件需要单独明确授权以避免并发覆盖。子任务结果未知要标记 UNKNOWN/FAILED 类别，不因为父模型在报告中写“已完成”就更改真实状态。
+**默认约束**：`MAX_SUBAGENT_CONCURRENCY=3`、`MAX_DELEGATION_DEPTH=1`，每个子任务有 `max_steps` 和超时；子 Agent 默认只读 Workspace，写文件需要单独明确授权以避免并发覆盖。子任务结果未知要标记 UNKNOWN/FAILED 类别，不因为父模型在报告中写“已完成”就更改真实状态。
 
 **实现次序**：P04-A Todo Tool/State → P04-B 一个串行子代理 → P04-C 三个并发以内、超时/取消/事件 → P04-D UI 与受影响合同测试。禁止把调度改成大型任务队列或随意扩展角色列表。
 
-**DeerFlow 参考**：\`agents/middlewares/todo_middleware.py\`、\`tools/builtins/task_tool.py\`、\`subagents/executor.py\`，注意这些文件根路径均为 \`backend/packages/harness/deerflow/\`。父图 Checkpoint 不保证进程内子任务精确恢复。
+**DeerFlow 参考**：`agents/middlewares/todo_middleware.py`、`tools/builtins/task_tool.py`、`subagents/executor.py`，注意这些文件根路径均为 `backend/packages/harness/deerflow/`。父图 Checkpoint 不保证进程内子任务精确恢复。
 
 ### P05 — 统一 ToolRegistry、MCP 适配器与 Skills
 
-**业务链**：Lead 请求可用工具 → Registry 合并内置工具与经批准的 MCP 工具 → ToolExecutor 统一校验权限/超时/异常 → 模型按需选择工具；当任务需要某种工作方法时，\`list_skills/read_skill\` 只加载对应 SKILL.md 的正文。**MCP 是工具来源，Skill 是执行说明，二者不是同一套运行机制。**
+**业务链**：Lead 请求可用工具 → Registry 合并内置工具与经批准的 MCP 工具 → ToolExecutor 统一校验权限/超时/异常 → 模型按需选择工具；当任务需要某种工作方法时，`list_skills/read_skill` 只加载对应 SKILL.md 的正文。**MCP 是工具来源，Skill 是执行说明，二者不是同一套运行机制。**
 
 | 新增/修改文件 | 编码必须完成的具体内容 |
 | --- | --- |
-| \`tools/registry.py\` | \`ToolRegistry.register/get/list_allowed\`：按唯一名字注册工具（重名直接拒绝，不静默覆盖）；每项含 ToolSchema、权限级别、超时与来源；合并 P01、P03、P04 工具及 MCP Tool。 |
-| \`tools/executor.py\` | \`execute(tool_name,arguments,policy,context)\`：先检查名字、权限、参数，再执行指定工具；按工具声明区分 read/write，超时、错误统一封装；未来网络有副作用操作遇未知结果不得盲重试。若 LangChain 的 tool lifecycle 与调用链不匹配，使用框架支持的 Middleware 包裹执行，避免另造与框架竞争的工具主循环。 |
-| \`tools/mcp_adapter.py\` | 用 \`langchain-mcp-adapters\` 的现成 Client/工具转换接入配置好的 MCP Server，映射工具名/Schema/说明，执行统一转交 ToolExecutor；MCP 连接失败分类为 \`MCP_UNAVAILABLE\`，不能影响内置工具。 |
-| \`core/mcp_settings.py\` | 使用明确的本地配置（如 \`MCP_SERVERS\` 或单个受控配置文件）声明 server_id、transport、URL/command、timeout、allowlist；第一版只允许用户预先配置的只读 Server，禁止模型自动新增任意 stdio command。 |
-| \`skills/models.py\` | \`SkillMeta(name,description,path,allowed_tools)\`，记录必要元信息，不将所有正文常驻系统 Prompt。 |
-| \`skills/loader.py\` | \`discover_skills(root)\` 读取受控本地 Skills 目录，\`load_skill(name)\` 使用安全 YAML 解析（需要时加入 PyYAML），验证名称唯一、正文大小上限、所需工具是否存在；禁止从任意 URL 自动下载安装 Skill。 |
-| \`tools/skill_tools.py\` | \`list_skills()\` 输出名称/简介，\`read_skill(name)\` 返回本地 Skill 必要正文；模型只在需要时加载，激活不改变执行器 allowlist。 |
-| \`skills/public/example-research/SKILL.md\` | 一个实际可执行的最小模板：输入目标、检索步骤、来源标注、输出规范；当前不实现 P07 的全部 Research 业务。 |
-| \`tests/test_tool_registry.py\`、\`tests/test_mcp.py\`、\`tests/test_skills.py\` | 重名、拒绝越权、参数错误、超时、MCP 断开、坏 YAML、Skill 工具不存在、超长 Skill、只读权限下执行写工具被拒绝。 |
+| `tools/registry.py` | `ToolRegistry.register/get/list_allowed`：按唯一名字注册工具（重名直接拒绝，不静默覆盖）；每项含 ToolSchema、权限级别、超时与来源；合并 P01、P03、P04 工具及 MCP Tool。 |
+| `tools/executor.py` | `execute(tool_name,arguments,policy,context)`：先检查名字、权限、参数，再执行指定工具；按工具声明区分 read/write，超时、错误统一封装；未来网络有副作用操作遇未知结果不得盲重试。若 LangChain 的 tool lifecycle 与调用链不匹配，使用框架支持的 Middleware 包裹执行，避免另造与框架竞争的工具主循环。 |
+| `tools/mcp_adapter.py` | 用 `langchain-mcp-adapters` 的现成 Client/工具转换接入配置好的 MCP Server，映射工具名/Schema/说明，执行统一转交 ToolExecutor；MCP 连接失败分类为 `MCP_UNAVAILABLE`，不能影响内置工具。 |
+| `core/mcp_settings.py` | 使用明确的本地配置（如 `MCP_SERVERS` 或单个受控配置文件）声明 server_id、transport、URL/command、timeout、allowlist；第一版只允许用户预先配置的只读 Server，禁止模型自动新增任意 stdio command。 |
+| `skills/models.py` | `SkillMeta(name,description,path,allowed_tools)`，记录必要元信息，不将所有正文常驻系统 Prompt。 |
+| `skills/loader.py` | `discover_skills(root)` 读取受控本地 Skills 目录，`load_skill(name)` 使用安全 YAML 解析（需要时加入 PyYAML），验证名称唯一、正文大小上限、所需工具是否存在；禁止从任意 URL 自动下载安装 Skill。 |
+| `tools/skill_tools.py` | `list_skills()` 输出名称/简介，`read_skill(name)` 返回本地 Skill 必要正文；模型只在需要时加载，激活不改变执行器 allowlist。 |
+| `skills/public/example-research/SKILL.md` | 一个实际可执行的最小模板：输入目标、检索步骤、来源标注、输出规范；当前不实现 P07 的全部 Research 业务。 |
+| `tests/test_tool_registry.py`、`tests/test_mcp.py`、`tests/test_skills.py` | 重名、拒绝越权、参数错误、超时、MCP 断开、坏 YAML、Skill 工具不存在、超长 Skill、只读权限下执行写工具被拒绝。 |
 
-**固定权限策略**：工具默认 \`DENY\`，按 Run/角色显式构造 \`allowed_tools\`；子 Agent 可用工具是“父权限 ∩ 角色权限 ∩ 本次任务授权”，任何 Skill 提示都无权提升权限。ToolExecutor 对工具的名字和参数做可复验的检查，输出有明确错误代码、脱敏 Trace 和长度上限。不允许把远程 MCP 返回文本当成系统指令。
+**固定权限策略**：工具默认 `DENY`，按 Run/角色显式构造 `allowed_tools`；子 Agent 可用工具是“父权限 ∩ 角色权限 ∩ 本次任务授权”，任何 Skill 提示都无权提升权限。ToolExecutor 对工具的名字和参数做可复验的检查，输出有明确错误代码、脱敏 Trace 和长度上限。不允许把远程 MCP 返回文本当成系统指令。
 
 **实现次序**：P05-A Registry/Executor → P05-B 单个只读 MCP Server/失败处理 → P05-C Skill Parser/Tool → P05-D 权限与直接受影响的 Agent Tool Calling 测试。
 
 **局部验收**：不改 Lead Agent 的核心循环即可注册一个新的 MCP Tool 与一个 Skill；连通实际可用的只读 MCP Server 或如实说明环境无法连接；工具不可通过 Skill/委派绕过授权。仅测对应的 registry/mcp/skills 测试及直接 Tool 集成。
 
-**DeerFlow 参考**：\`backend/packages/harness/deerflow/tools/tools.py\`、\`mcp/tools.py\`、\`skills/parser.py\`、\`skills/tool_policy.py\`、\`agents/middlewares/skill_activation_middleware.py\`，所有均位于 \`backend/packages/harness/deerflow/\` 根下。
+**DeerFlow 参考**：`backend/packages/harness/deerflow/tools/tools.py`、`mcp/tools.py`、`skills/parser.py`、`skills/tool_policy.py`、`agents/middlewares/skill_activation_middleware.py`，所有均位于 `backend/packages/harness/deerflow/` 根下。
 
 ### P06 — 上下文压缩、预算、取消与恢复边界
 
@@ -351,17 +370,17 @@ Git 提交例：chore: bootstrap minimal FastAPI backend with uv。只能提交�
 
 | 新增/修改文件 | 编码必须完成的具体内容 |
 | --- | --- |
-| \`runtime/budget.py\` | \`RunBudget(max_steps,max_tool_calls,max_seconds,max_input_tokens_estimate)\`；\`BudgetTracker.before_model/before_tool/record_usage\`，触发上限后返回 \`BUDGET_EXCEEDED\` 与统计。估算 token 与提供方真实 usage 分开标记，禁止把估算说成实际账单。 |
-| \`agents/context.py\` | \`ContextManager.prepare(messages,todos,refs,budget)\`：保留最近交互和关键用户约束；将旧消息摘要化，必要时调用已配置模型进行 summary；保护当前 Todo、真实 source_ids、artifact_ids，不丢失未完成步骤。 |
-| \`agents/middleware.py\` | 通过官方 \`AgentMiddleware\` 或当前 \`create_agent\` 支持的中间件装配预算、工具输出长度、异常转换、摘要策略；**不重新实现模型/工具循环**。对支持的官方 Middleware 优先直接配置，仅对缺少的行为实现小型自定义包装。 |
-| \`runtime/usage.py\` | \`UsageRecord(run_id,task_id?,model,input_tokens?,output_tokens?,estimated)\`，统计模型/子任务/工具耗时；缺失供应商 usage 时保留 unknown/estimated 标志，不虚构 0 成本。 |
-| \`runtime/runner.py\`（修改） | 添加取消信号（\`asyncio.Event\` 或等价）与 \`request_cancel(run_id)\`；新工具执行前检查取消；已经开始的外部副作用不能假定立即停止或自动撤销；按真实结果写终态。 |
-| \`runtime/repository.py\`（修改） | 增加 \`CANCELLING\`、\`INTERRUPTED/UNKNOWN\` 状态需要时迁移；启动时检查旧 RUNNING 并标记 \`INTERRUPTED/UNKNOWN\`，不自动重新执行未知副作用动作。 |
-| \`api/runs.py\`（修改） | \`POST /api/runs/{run_id}/cancel\`：幂等请求，返回当前真实状态；已终结 Run 不重新启动。 |
-| \`tests/test_budget.py\`、\`tests/test_context.py\`、\`tests/test_cancel_recovery.py\` | 超限停止、摘要保护、真实/估算区分、取消后不启动新工具、服务重启孤儿标记和外部写工具 UNKNOWN 不被盲重试。 |
+| `runtime/budget.py` | `RunBudget(max_steps,max_tool_calls,max_seconds,max_input_tokens_estimate)`；`BudgetTracker.before_model/before_tool/record_usage`，触发上限后返回 `BUDGET_EXCEEDED` 与统计。估算 token 与提供方真实 usage 分开标记，禁止把估算说成实际账单。 |
+| `agents/context.py` | `ContextManager.prepare(messages,todos,refs,budget)`：保留最近交互和关键用户约束；将旧消息摘要化，必要时调用已配置模型进行 summary；保护当前 Todo、真实 source_ids、artifact_ids，不丢失未完成步骤。 |
+| `agents/middleware.py` | 通过官方 `AgentMiddleware` 或当前 `create_agent` 支持的中间件装配预算、工具输出长度、异常转换、摘要策略；**不重新实现模型/工具循环**。对支持的官方 Middleware 优先直接配置，仅对缺少的行为实现小型自定义包装。 |
+| `runtime/usage.py` | `UsageRecord(run_id,task_id?,model,input_tokens?,output_tokens?,estimated)`，统计模型/子任务/工具耗时；缺失供应商 usage 时保留 unknown/estimated 标志，不虚构 0 成本。 |
+| `runtime/runner.py`（修改） | 添加取消信号（`asyncio.Event` 或等价）与 `request_cancel(run_id)`；新工具执行前检查取消；已经开始的外部副作用不能假定立即停止或自动撤销；按真实结果写终态。 |
+| `runtime/repository.py`（修改） | 增加 `CANCELLING`、`INTERRUPTED/UNKNOWN` 状态需要时迁移；启动时检查旧 RUNNING 并标记 `INTERRUPTED/UNKNOWN`，不自动重新执行未知副作用动作。 |
+| `api/runs.py`（修改） | `POST /api/runs/{run_id}/cancel`：幂等请求，返回当前真实状态；已终结 Run 不重新启动。 |
+| `tests/test_budget.py`、`tests/test_context.py`、`tests/test_cancel_recovery.py` | 超限停止、摘要保护、真实/估算区分、取消后不启动新工具、服务重启孤儿标记和外部写工具 UNKNOWN 不被盲重试。 |
 
 **算法/约束固定**：
-- 每 Run 默认 \`max_steps=40\`、\`max_tool_calls=30\`、\`max_seconds=600\`（可在配置中调整），保护系统不进入无限循环。模型使用量若不支持精确记录，标 \`estimated\`。
+- 每 Run 默认 `max_steps=40`、`max_tool_calls=30`、`max_seconds=600`（可在配置中调整），保护系统不进入无限循环。模型使用量若不支持精确记录，标 `estimated`。
 - 工具结果文本超过建议阈值 12 KB 时存入 Artifact 并给模型短摘要和引用 ID；裁剪不能破坏引用可定位性。
 - ContextManager 只摘要较旧、已完成的交互；当前用户指令、尚未完成 Todo、关键证据/文件 ID 以结构化方式单独注入；摘要失败则按预算安全退出，不能静默丢上下文后继续。
 - 重启时只恢复已经落盘的 Thread/Graph 数据与标记 Run，**不自动恢复进程内并发 Sub-Agent**；有副作用操作的结果 UNKNOWN 不重试。
@@ -369,57 +388,57 @@ Git 提交例：chore: bootstrap minimal FastAPI backend with uv。只能提交�
 
 **实现次序**：P06-A Budget/Usage → P06-B Summary + Tool Output → P06-C Cancel/Restart 核查 → P06-D 局部故障注入。测试只测当前 Budget/Context/Runner/API 的直接影响，不重跑 Research/RAG 全量评测。
 
-**DeerFlow 参考**：\`agents/middlewares/summarization_middleware.py\`、\`tool_output_budget_middleware.py\`、\`loop_detection_middleware.py\`、\`runtime/runs/manager.py\`、\`runtime/runs/worker.py\`（均在 Harness 根下）。
+**DeerFlow 参考**：`agents/middlewares/summarization_middleware.py`、`tool_output_budget_middleware.py`、`loop_detection_middleware.py`、`runtime/runs/manager.py`、`runtime/runs/worker.py`（均在 Harness 根下）。
 
 ### P07 — Deep Research 的完整业务实现
 
-**业务链**：用户给出研究题 → Lead 加载 \`deep-research\` Skill → Todo 分主题 → \`search_web\` 检索 → \`fetch_webpage\` 获取页面内容 → Sub-Agent 做独立分析 → \`EvidenceStore\` 汇总真实来源 → \`ReportWriter\` 输出 Markdown Artifact → 用户下载。**不重写一套固定 Deep Research Graph**，复用既有 Lead + Task + Tools + Skills。
+**业务链**：用户给出研究题 → Lead 加载 `deep-research` Skill → Todo 分主题 → `search_web` 检索 → `fetch_webpage` 获取页面内容 → Sub-Agent 做独立分析 → `EvidenceStore` 汇总真实来源 → `ReportWriter` 输出 Markdown Artifact → 用户下载。**不重写一套固定 Deep Research Graph**，复用既有 Lead + Task + Tools + Skills。
 
-**联网供应商固定**：首选 **Tavily Search API** 作为单一搜索适配器；通过 \`TAVILY_API_KEY\` 环境变量配置，搜索结果必须携带真实 URL、标题、片段。若账户不可用，任务标记外部依赖阻塞并告知用户，不由 Codex 擅自扩展为多个搜索框架。网页正文抓取走受限 \`httpx\`，只允许 http/https，限制大小/时长/重定向，并显式防 SSRF（拒绝 loopback、私有、链路本地地址和 DNS 重绑定风险）。不必自行编写复杂浏览器自动化。
+**联网供应商固定**：首选 **Tavily Search API** 作为单一搜索适配器；通过 `TAVILY_API_KEY` 环境变量配置，搜索结果必须携带真实 URL、标题、片段。若账户不可用，任务标记外部依赖阻塞并告知用户，不由 Codex 擅自扩展为多个搜索框架。网页正文抓取走受限 `httpx`，只允许 http/https，限制大小/时长/重定向，并显式防 SSRF（拒绝 loopback、私有、链路本地地址和 DNS 重绑定风险）。不必自行编写复杂浏览器自动化。
 
 | 新增/修改文件 | 编码必须完成的具体内容 |
 | --- | --- |
-| \`research/models.py\` | \`ResearchRequest(topic,scope?,report_format)\`、\`SearchHit(title,url,snippet,retrieved_at)\`、\`EvidenceRecord(id,url,excerpt,source_status)\`、\`ResearchReport(markdown,source_ids,artifact_id)\`；来源未访问/抓取失败必须标注状态。 |
-| \`research/search.py\` | \`TavilySearchProvider.search(query,max_results=5)\`：调用当前 Tavily SDK/HTTP API，转换为 SearchHit；过滤空 URL、去重、限制单次结果数；保留查询与检索时间及错误类别。 |
-| \`research/fetch.py\` | \`fetch_webpage(url)\`：\`httpx.AsyncClient\` 有界超时、响应大小、Content-Type 与 SSRF/跳转检查；提取可阅读的网页文本并截断，不允许读取内网或本地文件。仅 HTTP 标题/摘要不足时明确“正文未核验”。 |
-| \`research/evidence.py\` | \`EvidenceStore.add/list/get\`：保存 search/fetch 工具真实返回的 URL、片段、检索时间、状态及来源 ID；相同 URL 规范化去重。严禁模型自己生成新的“已检索来源”ID。 |
-| \`research/report.py\` | \`render_markdown_report(title,findings,evidence_ids,limitations)\`：生成标题、研究方法、核心结论、对比、局限与来源清单；引用只能指向 EvidenceStore 中已经存在且满足引用条件的记录。将最终文本通过 P03 Workspace 保存为 Artifact。 |
-| \`tools/research_tools.py\` | \`search_web\`、\`fetch_webpage\`、\`save_research_report\` 包装上述服务，加入 Registry 并声明超时/权限；工具的大返回内容存 Artifact/证据而非无限推给模型。 |
-| \`skills/public/deep-research/SKILL.md\` | 明确输入、计划、分主题、搜索→核对、反向检索、合并、引用与停止标准；要求事实区分 verified/unverified，输出本项目支持的 Markdown 报告。 |
-| \`frontend/src/components/ResearchReport.tsx\` | 展示报告、来源链接、无法验证提示和下载按钮；复用 P02 流事件、P03 Artifact API。 |
-| \`tests/test_research_search.py\`、\`test_research_evidence.py\`、\`test_research_report.py\` | Mock 搜索结果转换、URL 去重、抓取失败、SSRF、虚假引用被拒绝、报告实际生成与 Artifact 下载。 |
+| `research/models.py` | `ResearchRequest(topic,scope?,report_format)`、`SearchHit(title,url,snippet,retrieved_at)`、`EvidenceRecord(id,url,excerpt,source_status)`、`ResearchReport(markdown,source_ids,artifact_id)`；来源未访问/抓取失败必须标注状态。 |
+| `research/search.py` | `TavilySearchProvider.search(query,max_results=5)`：调用当前 Tavily SDK/HTTP API，转换为 SearchHit；过滤空 URL、去重、限制单次结果数；保留查询与检索时间及错误类别。 |
+| `research/fetch.py` | `fetch_webpage(url)`：`httpx.AsyncClient` 有界超时、响应大小、Content-Type 与 SSRF/跳转检查；提取可阅读的网页文本并截断，不允许读取内网或本地文件。仅 HTTP 标题/摘要不足时明确“正文未核验”。 |
+| `research/evidence.py` | `EvidenceStore.add/list/get`：保存 search/fetch 工具真实返回的 URL、片段、检索时间、状态及来源 ID；相同 URL 规范化去重。严禁模型自己生成新的“已检索来源”ID。 |
+| `research/report.py` | `render_markdown_report(title,findings,evidence_ids,limitations)`：生成标题、研究方法、核心结论、对比、局限与来源清单；引用只能指向 EvidenceStore 中已经存在且满足引用条件的记录。将最终文本通过 P03 Workspace 保存为 Artifact。 |
+| `tools/research_tools.py` | `search_web`、`fetch_webpage`、`save_research_report` 包装上述服务，加入 Registry 并声明超时/权限；工具的大返回内容存 Artifact/证据而非无限推给模型。 |
+| `skills/public/deep-research/SKILL.md` | 明确输入、计划、分主题、搜索→核对、反向检索、合并、引用与停止标准；要求事实区分 verified/unverified，输出本项目支持的 Markdown 报告。 |
+| `frontend/src/components/ResearchReport.tsx` | 展示报告、来源链接、无法验证提示和下载按钮；复用 P02 流事件、P03 Artifact API。 |
+| `tests/test_research_search.py`、`test_research_evidence.py`、`test_research_report.py` | Mock 搜索结果转换、URL 去重、抓取失败、SSRF、虚假引用被拒绝、报告实际生成与 Artifact 下载。 |
 
 **固定研究策略**：先由 Lead 评估问题范围，复杂任务创建 Todo；单个问题默认搜索不超过 5 条候选结果，每个 Run 总工具/Token/时间预算继承 P06；多个研究方向可由 P04 允许的 Research 子 Agent 并行检索；子 Agent 回传 **Findings + Evidence IDs + Missing** 而非全量网页文本。报告中没有真实证据的主张不得以确定性语气编成引用。只依靠搜索摘要的结论必须标记摘要级来源，不当作已精读正文。
 
 **实现次序**：P07-A 搜索与抓取 → P07-B Evidence/引文 ID → P07-C Research Skill + 子任务报告 → P07-D UI 和一个真实网络 Smoke。测试只跑本次 research tests 和直接使用的 Tool/Artifact 接口，真实模型报告人工抽查主要来源。
 
-**DeerFlow 参考**：\`skills/public/deep-research/SKILL.md\`、\`skills/public/systematic-literature-review/SKILL.md\`、\`backend/packages/harness/deerflow/tools/builtins/task_tool.py\`。Skill 负责工作方法而不是替代实际搜索工具。
+**DeerFlow 参考**：`skills/public/deep-research/SKILL.md`、`skills/public/systematic-literature-review/SKILL.md`、`backend/packages/harness/deerflow/tools/builtins/task_tool.py`。Skill 负责工作方法而不是替代实际搜索工具。
 
 ### P08 — Docling + Chroma 多文档 RAG
 
-**业务链**：用户从 P03 上传 PDF/Markdown/TXT → \`DocumentService\` 识别格式并调用 Parser → 保留真实页码/章节/文本结构 → Chunk → Embedding → Chroma 本地索引 → \`search_knowledge(scope,query,top_k)\` 返回真实 Evidence → Lead 生成带证据 ID 的回答；上传/解析失败或没有可用片段时拒答或标记不足。
+**业务链**：用户从 P03 上传 PDF/Markdown/TXT → `DocumentService` 识别格式并调用 Parser → 保留真实页码/章节/文本结构 → Chunk → Embedding → Chroma 本地索引 → `search_knowledge(scope,query,top_k)` 返回真实 Evidence → Lead 生成带证据 ID 的回答；上传/解析失败或没有可用片段时拒答或标记不足。
 
-**Embedding 决策**：使用 \`langchain-openai.OpenAIEmbeddings\` 的一个经测试支持的服务（独立 \`EMBEDDING_MODEL\`、\`EMBEDDING_API_KEY\`、\`EMBEDDING_BASE_URL\` 配置，允许明确继承模型配置但不能假定 ChatModel 与 Embedding API 一致）；不用额外部署大型本地 Embedding 推理服务。调用失败则标记索引 FAILED，不写“已建库”。
+**Embedding 决策**：使用 `langchain-openai.OpenAIEmbeddings` 的一个经测试支持的服务（独立 `EMBEDDING_MODEL`、`EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL` 配置，允许明确继承模型配置但不能假定 ChatModel 与 Embedding API 一致）；不用额外部署大型本地 Embedding 推理服务。调用失败则标记索引 FAILED，不写“已建库”。
 
 | 新增/修改文件 | 编码必须完成的具体内容 |
 | --- | --- |
-| \`knowledge/models.py\` | \`DocumentRecord(id,thread_id,filename,content_sha256,parser_version,index_status)\`；\`ChunkRecord(id,document_id,index_version,source_text,page?,section?,offset?)\`；\`KnowledgeHit(chunk_id,document_id,excerpt,page?,score)\`。页码无法可靠获得时为 null，不猜测。 |
-| \`knowledge/parser.py\` | \`parse_document(file_ref)->ParsedDocument\`：文本直接解码；PDF 使用 Docling \`DocumentConverter().convert(path)\`，检查转换状态，提取结构化文档、页码/章节与原文。使用结构元素/provenance 保留真实位置；不要仅 export_to_markdown 后通过正则假推页码。重型同步解析放入线程，不阻塞 Async API。 |
-| \`knowledge/chunker.py\` | \`chunk_document(parsed,max_chars=1200,overlap=150)\`：优先章节/段落边界，超长文本定长切片；产生稳定 \`chunk_id=hash(document_id,index_version,position,source_hash)\`，记录原文与真实位置。源文和用于召回的可选文本分开。 |
-| \`knowledge/embedding.py\` | \`EmbeddingProvider.embed_documents/embed_query\`：单一模型与 API 适配，控制 batch/超时，记录 embedding model/version/dim；不把用户文档写进日志。 |
-| \`knowledge/vector_store.py\` | \`ChromaIndex.upsert/delete_document/search\`：\`chromadb.PersistentClient\` 存 \`data/chroma\`，每条记录含 document_id、thread_id、chunk_id、index_version、page（可空时按驱动规则处理）；检索时强制使用 scope 过滤，返回 score/distance 的含义需准确声明。更新版本需先写新数据验证，再切换可见版本，不能混查新旧。 |
-| \`knowledge/service.py\` | \`ingest_document(file_id)\`：P03 受控读取→解析→分块→Embedding→Chroma upsert→索引状态 READY；失败写 FAILED 并清理不完整版本。 \`search_knowledge(thread_id,document_ids,query,top_k)\`：校验归属和索引版本，只返回实际检索到的原文片段与引用位置。 |
-| \`knowledge/repository.py\` | SQLite \`documents\`、\`index_versions\` 元数据，支持查看处理状态、重新建索引、删除过期索引；文件存储与 Chroma 不能假设有跨库事务，需要失败补偿。 |
-| \`tools/knowledge_tools.py\` | \`search_knowledge\` Tool Schema、scope 白名单和 Evidence ID，不允许模型给出任意用户路径；只允许当前 Thread 已授权文档。 |
-| \`api/knowledge.py\` | \`POST /api/threads/{id}/documents/{file_id}/index\`、\`GET /api/threads/{id}/documents\` 等最小接口（异步建索引可查询状态）；不能把耗时 Docling 解析直接堵塞事件循环。 |
-| \`frontend/src/components/DocumentPanel.tsx\` | 上传后索引按钮/状态、文档选择、可跳转的来源页码或片段；不承诺具备完整 PDF 阅读器。 |
-| \`tests/test_parser.py\`、\`test_chunker.py\`、\`test_vector_store.py\`、\`test_knowledge_api.py\` | 一份文本型 PDF/MD 解析、Chunk 位置一致性、索引检索、文档 Scope、无命中拒答、重建版本清理和失败恢复。 |
+| `knowledge/models.py` | `DocumentRecord(id,thread_id,filename,content_sha256,parser_version,index_status)`；`ChunkRecord(id,document_id,index_version,source_text,page?,section?,offset?)`；`KnowledgeHit(chunk_id,document_id,excerpt,page?,score)`。页码无法可靠获得时为 null，不猜测。 |
+| `knowledge/parser.py` | `parse_document(file_ref)->ParsedDocument`：文本直接解码；PDF 使用 Docling `DocumentConverter().convert(path)`，检查转换状态，提取结构化文档、页码/章节与原文。使用结构元素/provenance 保留真实位置；不要仅 export_to_markdown 后通过正则假推页码。重型同步解析放入线程，不阻塞 Async API。 |
+| `knowledge/chunker.py` | `chunk_document(parsed,max_chars=1200,overlap=150)`：优先章节/段落边界，超长文本定长切片；产生稳定 `chunk_id=hash(document_id,index_version,position,source_hash)`，记录原文与真实位置。源文和用于召回的可选文本分开。 |
+| `knowledge/embedding.py` | `EmbeddingProvider.embed_documents/embed_query`：单一模型与 API 适配，控制 batch/超时，记录 embedding model/version/dim；不把用户文档写进日志。 |
+| `knowledge/vector_store.py` | `ChromaIndex.upsert/delete_document/search`：`chromadb.PersistentClient` 存 `data/chroma`，每条记录含 document_id、thread_id、chunk_id、index_version、page（可空时按驱动规则处理）；检索时强制使用 scope 过滤，返回 score/distance 的含义需准确声明。更新版本需先写新数据验证，再切换可见版本，不能混查新旧。 |
+| `knowledge/service.py` | `ingest_document(file_id)`：P03 受控读取→解析→分块→Embedding→Chroma upsert→索引状态 READY；失败写 FAILED 并清理不完整版本。 `search_knowledge(thread_id,document_ids,query,top_k)`：校验归属和索引版本，只返回实际检索到的原文片段与引用位置。 |
+| `knowledge/repository.py` | SQLite `documents`、`index_versions` 元数据，支持查看处理状态、重新建索引、删除过期索引；文件存储与 Chroma 不能假设有跨库事务，需要失败补偿。 |
+| `tools/knowledge_tools.py` | `search_knowledge` Tool Schema、scope 白名单和 Evidence ID，不允许模型给出任意用户路径；只允许当前 Thread 已授权文档。 |
+| `api/knowledge.py` | `POST /api/threads/{id}/documents/{file_id}/index`、`GET /api/threads/{id}/documents` 等最小接口（异步建索引可查询状态）；不能把耗时 Docling 解析直接堵塞事件循环。 |
+| `frontend/src/components/DocumentPanel.tsx` | 上传后索引按钮/状态、文档选择、可跳转的来源页码或片段；不承诺具备完整 PDF 阅读器。 |
+| `tests/test_parser.py`、`test_chunker.py`、`test_vector_store.py`、`test_knowledge_api.py` | 一份文本型 PDF/MD 解析、Chunk 位置一致性、索引检索、文档 Scope、无命中拒答、重建版本清理和失败恢复。 |
 
-**固定检索逻辑**：V1 先 \`top_k=5\` 向量检索，命中片段附 \`document_id/chunk_id/page/section\` 及证据 ID；无可靠页码时只引用文件和片段，不伪造 PDF 页码。答案只能引用真实返回的 Evidence ID，禁止把生成摘要或虚构元数据当作原文事实。暂不做 Hybrid/Rerank、多级知识图谱和复杂智能路由，后续需有独立评测收益才扩展。
+**固定检索逻辑**：V1 先 `top_k=5` 向量检索，命中片段附 `document_id/chunk_id/page/section` 及证据 ID；无可靠页码时只引用文件和片段，不伪造 PDF 页码。答案只能引用真实返回的 Evidence ID，禁止把生成摘要或虚构元数据当作原文事实。暂不做 Hybrid/Rerank、多级知识图谱和复杂智能路由，后续需有独立评测收益才扩展。
 
-**实现次序**：P08-A Docling Parser/Chunk → P08-B Embedding/Chroma → P08-C Ingest/Search Tool 与引用 → P08-D 文档 UI 与局部金标 QA。只测 \`knowledge\` 当前模块及直接 Tool/API 消费者，不重跑 Deep Research 全套任务。
+**实现次序**：P08-A Docling Parser/Chunk → P08-B Embedding/Chroma → P08-C Ingest/Search Tool 与引用 → P08-D 文档 UI 与局部金标 QA。只测 `knowledge` 当前模块及直接 Tool/API 消费者，不重跑 Deep Research 全套任务。
 
-**参考**：DeerFlow 的 Workspace/Tool/Skill 接入形式；RAG 内部是我们独立实现，不把其 \`deep-research/SKILL.md\` 当向量数据库实现。Docling 官方从 \`DocumentConverter\` 返回 \`ConversionResult\`，应检查 \`result.status\` 并利用 \`result.document\` 的 provenance 信息，具体 API 用锁定版本实测。
+**参考**：DeerFlow 的 Workspace/Tool/Skill 接入形式；RAG 内部是我们独立实现，不把其 `deep-research/SKILL.md` 当向量数据库实现。Docling 官方从 `DocumentConverter` 返回 `ConversionResult`，应检查 `result.status` 并利用 `result.document` 的 provenance 信息，具体 API 用锁定版本实测。
 
 ### P09 — UI 完善、部署、定版评测与最终交付
 
@@ -427,14 +446,14 @@ Git 提交例：chore: bootstrap minimal FastAPI backend with uv。只能提交�
 
 | 新增/修改文件 | 编码必须完成的具体内容 |
 | --- | --- |
-| \`frontend/src/components/RunTimeline.tsx\` | 统一展示 Run 状态、Todo、Task、Tool 与 Artifact 事件，使用真实 EventEnvelope，不能从自然语言猜测进度。 |
-| \`frontend/src/App.tsx\`、\`frontend/src/api/client.ts\` | 整理已有组件和异常状态、断线后的 \`GET /api/runs/{id}\` 同步；不引入复杂全站状态库。 |
-| \`backend/src/minideerflow/core/logging.py\` | 统一 run_id/thread_id/task_id 的结构化摘要日志，敏感参数脱敏，不存 API Key、PDF 原文和私有响应。 |
-| \`eval/cases/research.json\`、\`eval/cases/rag.json\`、\`eval/cases/files.json\` | 小型固定任务集与人工检查要求；包含明确真实来源/文档范围或确定性输出标准，不填伪造成绩。 |
-| \`eval/run_eval.py\` | 调用本项目已有 API/Service 运行指定样本，记录 \`git_sha/model/config/dataset_version/latency/token_usage/error\` 与产物引用，原始结果写入 Git 忽略目录；报告标明无法运行和失败项。 |
-| \`Dockerfile\` / \`backend/Dockerfile\`、\`frontend/Dockerfile\`、\`compose.yaml\` | 两个服务的单机启动；映射 Python 数据卷和必需的环境变量，不硬编码 Key；容器非 root，API 默认不无认证暴露公网。根据真实依赖控制体积。 |
-| \`README.md\` | 安装、配置、PyCharm/终端启动、Docker、三条业务真实 Demo、已知局限和 DeerFlow 参考/源码许可；只列实际已实现功能。 |
-| \`tests/test_release_smoke.py\`、前端对应组件测试 | 只验证本次新增部署/时间线/日志/发布合同；另实际运行三条**完整最终 Demo**，属于交付阶段约定而非每阶段全量回归。 |
+| `frontend/src/components/RunTimeline.tsx` | 统一展示 Run 状态、Todo、Task、Tool 与 Artifact 事件，使用真实 EventEnvelope，不能从自然语言猜测进度。 |
+| `frontend/src/App.tsx`、`frontend/src/api/client.ts` | 整理已有组件和异常状态、断线后的 `GET /api/runs/{id}` 同步；不引入复杂全站状态库。 |
+| `backend/src/minideerflow/core/logging.py` | 统一 run_id/thread_id/task_id 的结构化摘要日志，敏感参数脱敏，不存 API Key、PDF 原文和私有响应。 |
+| `eval/cases/research.json`、`eval/cases/rag.json`、`eval/cases/files.json` | 小型固定任务集与人工检查要求；包含明确真实来源/文档范围或确定性输出标准，不填伪造成绩。 |
+| `eval/run_eval.py` | 调用本项目已有 API/Service 运行指定样本，记录 `git_sha/model/config/dataset_version/latency/token_usage/error` 与产物引用，原始结果写入 Git 忽略目录；报告标明无法运行和失败项。 |
+| `Dockerfile` / `backend/Dockerfile`、`frontend/Dockerfile`、`compose.yaml` | 两个服务的单机启动；映射 Python 数据卷和必需的环境变量，不硬编码 Key；容器非 root，API 默认不无认证暴露公网。根据真实依赖控制体积。 |
+| `README.md` | 安装、配置、PyCharm/终端启动、Docker、三条业务真实 Demo、已知局限和 DeerFlow 参考/源码许可；只列实际已实现功能。 |
+| `tests/test_release_smoke.py`、前端对应组件测试 | 只验证本次新增部署/时间线/日志/发布合同；另实际运行三条**完整最终 Demo**，属于交付阶段约定而非每阶段全量回归。 |
 
 **实施次序**：P09-A 前端体验/错误状态 → P09-B 定版样本和 Eval Runner → P09-C 单机 Docker/环境复现 → P09-D 三条真实 Demo、来源归属与安全复核。若没有模型/搜索/Embedding Key，明确将对应真实 Demo 标记 BLOCKED 或 NOT_RUN，不编造演示结果。
 
@@ -442,7 +461,7 @@ Git 提交例：chore: bootstrap minimal FastAPI backend with uv。只能提交�
 
 **验收**：新环境可按 README 启动；三条演示分别拥有输入、脱敏 Run 记录、真实文件/引用、版本与失败说明；能证明工具限额、安全文件规则和外部不可用时的真实失败行为。最终是否执行全量历史 pytest/E2E 由用户另行决定，Codex 不自动扩大测试范围。
 
-**DeerFlow 参考**：\`frontend/src/components/workspace/\`、\`frontend/src/core/tasks/context.tsx\`、\`backend/packages/harness/deerflow/runtime/runs/manager.py\`；只参考事件/界面组织，不复制完整界面与复杂运行时。
+**DeerFlow 参考**：`frontend/src/components/workspace/`、`frontend/src/core/tasks/context.tsx`、`backend/packages/harness/deerflow/runtime/runs/manager.py`；只参考事件/界面组织，不复制完整界面与复杂运行时。
 
 ## 6. Codex 执行规则：让本地 AI 用最少上下文开发
 
