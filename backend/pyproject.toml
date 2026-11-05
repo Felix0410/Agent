@@ -7,6 +7,9 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "pydantic-settings",
+    "langchain>=1.4.9",
+    "langchain-openai>=1.7.4",
+    "langgraph>=1.2.20",
 ]
 
 [dependency-groups]
@@ -22,6 +25,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/minideerflow"]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
 
 [tool.ruff]
 target-version = "py312"
