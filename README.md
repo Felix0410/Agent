@@ -54,7 +54,7 @@ uv run uvicorn minideerflow.main:app --host 127.0.0.1 --port 8000
 
 另一个终端进入 `backend/` 后执行 `curl -i http://127.0.0.1:8000/health`，实测返回 HTTP 200 和 `{"status":"ok"}`。终端按 Ctrl+C 停止服务。P00 当时局部测试实测 4 passed、1 条 TestClient 弃用警告（详见 P00 进度）；P01 新增传递依赖 httpx2 后该警告消失。
 
-基础配置为 `APP_ENV`（默认 `development`）和 `LOG_LEVEL`（默认 `INFO`）。根目录 `.env.example` 仅为模板，应用不自动加载 `.env`；需通过终端 `export` 或 PyCharm Environment Variables 设置。P01 模型配置见下文。
+基础配置为 `APP_ENV`（默认 `development`）和 `LOG_LEVEL`（默认 `INFO`）。后端自动读取仓库根目录 `.env`（UTF-8），不依赖启动工作目录；文件不存在时使用默认值。同名进程环境变量（终端 `export` 或 PyCharm Environment Variables）优先。修改 `.env` 后需重启后端。P01 模型配置见下文。
 
 PyCharm 打开整个仓库，将解释器设为 `<仓库>/backend/.venv/bin/python`；创建 Python Run/Debug 配置，Module 为 `uvicorn`，Parameters 为 `minideerflow.main:app --host 127.0.0.1 --port 8000`，Working Directory 为 `<仓库>/backend`，不加 `--reload`。在 `main.py` 的 health 返回行设断点，再发起上述 curl 请求验证；**图形界面配置和断点命中待用户实测**。
 
@@ -63,6 +63,12 @@ PyCharm 打开整个仓库，将解释器设为 `<仓库>/backend/.venv/bin/pyth
 ## P01 本地 Demo
 
 实测 Node.js 24.13.0、npm 11.6.2；后端沿用 Python 3.12。根目录开两个终端：
+
+首次配置：复制根目录 `.env.example` 为 `.env`，填写模型名称、密钥和接口地址。已有 `.env` 时直接编辑，不覆盖；`.env` 已被 Git 忽略。
+
+```bash
+cp -n .env.example .env
+```
 
 终端一启动后端（无需模型密钥即可使用健康检查与计算器）：
 
@@ -93,7 +99,7 @@ curl -i -H 'Content-Type: application/json' -d '{"message":"hello"}' http://127.
 
 分别返回 200/`ok`、200/`60`、503/`MODEL_NOT_CONFIGURED`。直接计算仅支持数字、括号、`+ - * /` 与一元正负，最长 128 字符，数值及中间值绝对值不超过 10^12；计算错误返回 422。
 
-使用真实 Agent 前，在**启动后端的进程环境**配置 `MODEL_NAME`、`MODEL_API_KEY`，按提供方需要配置 `MODEL_BASE_URL`。提供方必须支持 Tool Calling；密钥仅留在后端环境，不放进前端。默认单次请求超时 45 秒、无 SDK 重试、图递归限制 12。当前没有这些配置，**REAL_MODEL_SMOKE_BLOCKED：未验证任何真实提供方或真实模型工具调用**。
+使用真实 Agent 前，在**仓库根目录 `.env`** 配置 `MODEL_NAME`、`MODEL_API_KEY`，按提供方需要配置 `MODEL_BASE_URL`。提供方必须支持 Tool Calling；密钥仅留在后端，不放进前端。默认单次请求超时 45 秒、无 SDK 重试、图递归限制 12。本次未提供真实模型配置，**REAL_MODEL_SMOKE_BLOCKED：未验证任何真实提供方或真实模型工具调用**。
 
 CLI 与 HTTP 复用同一 AgentService。在 `backend/` 执行：
 

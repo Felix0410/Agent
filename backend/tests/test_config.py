@@ -1,13 +1,15 @@
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from minideerflow.config import get_settings
+from minideerflow.config import Settings, get_settings
 
 
 @pytest.fixture(autouse=True)
-def isolate_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def isolate_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    monkeypatch.setitem(Settings.model_config, "env_file", tmp_path / ".env")
     for name in (
         "APP_ENV",
         "LOG_LEVEL",
@@ -82,3 +84,36 @@ def test_model_factory_constructs_without_network(monkeypatch: pytest.MonkeyPatc
     assert model.openai_api_base == "http://127.0.0.1:9999/v1"
     assert model.max_retries == 0
     assert model.request_timeout == 45
+
+
+def test_dotenv_loaded_from_other_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / ".env").write_text(
+        "APP_ENV=test\nLOG_LEVEL=DEBUG\nMODEL_NAME=test-model\n"
+        "MODEL_API_KEY=dotenv-test-secret\nMODEL_BASE_URL=http://127.0.0.1:9999/v1\n"
+        "UNRELATED_SETTING=ignored\n",
+        encoding="utf-8",
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    settings = get_settings()
+    assert settings.app_env == "test"
+    assert settings.log_level == "DEBUG"
+    assert settings.model_name == "test-model"
+    assert settings.model_api_key.get_secret_value() == "dotenv-test-secret"
+    assert settings.model_base_url == "http://127.0.0.1:9999/v1"
+    assert "dotenv-test-secret" not in settings.model_dump_json()
+
+
+def test_environment_overrides_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LOG_LEVEL=DEBUG\n", encoding="utf-8")
+    monkeypatch.setenv("LOG_LEVEL", "WARNING")
+    assert get_settings().log_level == "WARNING"
+
+
+def test_invalid_dotenv_rejected(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("LOG_LEVEL=INVALID\n", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        get_settings()

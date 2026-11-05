@@ -21,7 +21,7 @@ import pytest
 
 from minideerflow.agents.service import AgentExecutionError, AgentResponse
 from minideerflow.api import demo
-from minideerflow.config import get_settings
+from minideerflow.config import Settings, get_settings
 
 
 @pytest.mark.parametrize("message", ["", "  ", "x" * 2001, 42, None])
@@ -59,6 +59,7 @@ def test_agent_error_mapping(monkeypatch, code, status) -> None:
 
 
 def test_model_not_configured(monkeypatch) -> None:
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
     for name in ["MODEL_NAME", "MODEL_API_KEY", "MODEL_BASE_URL"]:
         monkeypatch.delenv(name, raising=False)
     get_settings.cache_clear()
