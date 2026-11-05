@@ -56,7 +56,7 @@ uv run uvicorn minideerflow.main:app --host 127.0.0.1 --port 8000
 
 基础配置为 `APP_ENV`（默认 `development`）和 `LOG_LEVEL`（默认 `INFO`）。后端自动读取仓库根目录 `.env`（UTF-8），不依赖启动工作目录；文件不存在时使用默认值。同名进程环境变量（终端 `export` 或 PyCharm Environment Variables）优先。修改 `.env` 后需重启后端。P01 模型配置见下文。
 
-PyCharm 打开整个仓库，将解释器设为 `<仓库>/backend/.venv/bin/python`；创建 Python Run/Debug 配置，Module 为 `uvicorn`，Parameters 为 `minideerflow.main:app --host 127.0.0.1 --port 8000`，Working Directory 为 `<仓库>/backend`，不加 `--reload`。在 `main.py` 的 health 返回行设断点，再发起上述 curl 请求验证；**图形界面配置和断点命中待用户实测**。
+PyCharm 打开整个仓库，将解释器设为 `<仓库>/backend/.venv/bin/python`，右键 `backend/src/minideerflow/main.py` → Run 或 Debug 即可启动后端。Run/Debug 配置使用 Script path `<仓库>/backend/src/minideerflow/main.py`、Working Directory `<仓库>/backend`，无需 Parameters。直接运行入口监听 `127.0.0.1:8000`，不启用 reload，支持在 health 返回行设置断点；**图形界面配置和断点命中待用户实测**。原来的 Uvicorn Module 启动方式仍可用。
 
 当前 `/health` 只表示进程存活；数据库、会话、SSE、多 Agent、Todo、文件与 RAG 尚未实现。
 
@@ -70,7 +70,7 @@ PyCharm 打开整个仓库，将解释器设为 `<仓库>/backend/.venv/bin/pyth
 cp -n .env.example .env
 ```
 
-终端一启动后端（无需模型密钥即可使用健康检查与计算器）：
+后端可直接在 PyCharm 右键 `main.py` → Run/Debug；也可以在终端启动（无需模型密钥即可使用健康检查与计算器）：
 
 ```bash
 cd backend
@@ -117,6 +117,6 @@ uv run ruff check src tests
 uv run ruff format --check src tests
 ```
 
-最终实测 **59 passed**，Ruff 通过；`npm ci` 与 `npm run build` 通过。Mock 验证框架内模型→工具→模型链路，不能替代真实模型 Smoke；页面中的成功 Agent 回答/轨迹也尚未在真实提供方验证。详细记录见 [P01 进度](docs/progress/P01.md)。PyCharm 仍沿用上面的 Uvicorn 配置，模型变量填入其 Environment Variables；图形界面断点命中待人工验证。
+最终实测 **59 passed**，Ruff 通过；`npm ci` 与 `npm run build` 通过。Mock 验证框架内模型→工具→模型链路，不能替代真实模型 Smoke；页面中的成功 Agent 回答/轨迹也尚未在真实提供方验证。详细记录见 [P01 进度](docs/progress/P01.md)。PyCharm 可直接运行/调试 main.py，模型配置填写根目录 `.env`；图形界面断点命中待人工验证。
 
 参考上游：[bytedance/deer-flow v2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，固定 commit 为 `7e7f0410797693cf882594555ba414e0361d4c6f`。参考实现不等于复用全部源码；实际复制或改编受许可代码时保留适用的 MIT 版权与许可声明。
