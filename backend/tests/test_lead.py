@@ -1,3 +1,5 @@
+"""单 Agent 局部测试：用可观测的假模型验证消息循环与异常边界。"""
+
 import asyncio
 from typing import Any
 
@@ -10,9 +12,12 @@ from minideerflow.agents.service import AgentExecutionError, run_agent_once
 
 
 class ScriptedModel(FakeMessagesListChatModel):
+    """预设模型消息，并记录 Agent 真正传入模型的消息列表。"""
+
     seen: list[list[BaseMessage]] = Field(default_factory=list)
 
     def bind_tools(self, tools: Any, **kwargs: Any):
+        # 假模型无需连接真实工具接口，但仍允许框架完成标准 Tool Calling 流程。
         return self
 
     def _generate(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs):
@@ -37,6 +42,7 @@ def test_no_tool_reply() -> None:
     ],
 )
 def test_tool_loop(expression: str, result: str, ok: bool) -> None:
+    # 1. 让假模型先发出带真实调用 ID 的 Tool Call，再返回最终文本。
     model = ScriptedModel(
         responses=[
             AIMessage(
@@ -52,6 +58,7 @@ def test_tool_loop(expression: str, result: str, ok: bool) -> None:
             AIMessage(content="Final answer"),
         ]
     )
+    # 2. 使用真实 Agent 流程执行计算工具，验证服务层只记录实际工具结果。
     response = asyncio.run(run_agent_once("Calculate", model=model))
     assert response.answer == "Final answer"
     assert response.tool_calls[0].model_dump() == {
@@ -60,6 +67,7 @@ def test_tool_loop(expression: str, result: str, ok: bool) -> None:
         "result": result,
         "ok": ok,
     }
+    # 3. 核对工具结果确实作为同一 ID 的 ToolMessage 反馈给模型。
     tool_messages = [m for m in model.seen[1] if isinstance(m, ToolMessage)]
     assert len(tool_messages) == 1
     assert tool_messages[0].tool_call_id == "actual-call-1"
@@ -182,6 +190,7 @@ def test_request_deadline(monkeypatch) -> None:
     ],
 )
 def test_incomplete_or_unmatched_trace_rejected(monkeypatch, messages) -> None:
+    # 工具调用没有回执，或回执找不到原调用，都不能被当作成功的执行轨迹。
     from minideerflow.agents import service
 
     class InvalidAgent:
