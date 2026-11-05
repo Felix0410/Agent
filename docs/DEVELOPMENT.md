@@ -1,7 +1,7 @@
 # 开发方案、任务顺序与局部测试规则
 
 **方案版本**：v1.6 · 2026-11-05  
-**当前状态**：设计确定；P00 尚未开始。各阶段真实进度独立记录在 `docs/progress/Pxx.md`，本文件只维护计划与执行规则。  
+**当前状态**：P00 代码已在 main；P01 方案已细化（PLAN_READY）、待本地编码。各阶段真实进度独立记录在 `docs/progress/Pxx.md`，本文件只维护计划与执行规则。  
 **原则**：从零构建 Mini DeerFlow，逐步增加能力。**每个阶段在实际开始之前，必须根据当时真实代码和上游实现重新形成当前阶段的具体实施方案，先交用户审核，再交 Codex 编码。** 一个阶段可以拆成多个小任务，Codex 每次只执行一个，完成后等待用户审核，不自动进入下一阶段。
 
 ## 0. 阶段设计先行：每次只最终确定当前阶段
@@ -10,7 +10,7 @@
 
 1. **当前阶段现状审查（ChatGPT）**：确认 GitHub 实际代码、分支、前一阶段审核结果和 `docs/progress/Pxx.md`；检查已经存在的类、接口、测试、锁定依赖版本及本阶段实际需要参考的 DeerFlow 固定源码。不得假定先前规划的目标文件已经实现。
 2. **当前阶段方案设计（ChatGPT）**：按照下面的“阶段方案交付合同”，将当前阶段真正需要做的业务主线、模块接口、逐文件职责、关键机制、编码顺序、异常与测试全部定下来。发现原先分阶段规划与实际代码冲突，先解释差异、给出最小调整建议。对重要技术选择说明为什么使用它、与替代方案的差异和引入时机。
-3. **用户审核设计**：先在对话中讲清楚这阶段要做什么、每个执行文件干什么、为什么这样实现和如何验收；用户明确认可后，才将**本阶段最终可执行规格**更新到本文件对应章节并同步 GitHub。状态为 `PLAN_READY`，**这只表示方案通过，不等于编码完成**。
+3. **用户审核设计**：先在对话中讲清楚这阶段要做什么、每个执行文件干什么、为什么这样实现和如何验收；用户明确认可后，才将**本阶段最终可执行规格**更新到本文件对应章节并同步 GitHub。用户在 2026-11-05 已要求继续推进 P01，并追加最小 Demo 后人工测试、每任务同步前端规则；据此形成当阶段实施合同，编码完成仍需用户验收。状态为 `PLAN_READY`，**这只表示方案通过，不等于编码完成**。
 4. **Codex 按规格编码**：给 Codex 的输入严格限于当前阶段已批准的细化方案、当前阶段进度文档、必要的现有源码/测试及 1–3 个准确的上游参考文件；Codex 只编码、执行当前新增或修改内容的局部测试、提交变更。它不得自主重新规划架构、改变技术选型、扩大任务范围或开始下一阶段。
 5. **用户审核实现**：Codex 报告真实修改、命令、局部测试结果与 SHA，更新 `docs/progress/Pxx.md` 为 `PENDING_REVIEW`；用户根据代码和执行证据决定 `ACCEPTED` 或 `BLOCKED`。通过后才能设计下一个阶段。
 
@@ -75,8 +75,8 @@ Codex 报告必须明确列出“本次改了什么 → 测了哪些 → 为什�
 | 阶段 | 实际交付 | 本阶段仅需验证的内容 | DeerFlow 主要参考 |
 |---|---|---|---|
 | P00 工程初始化 | 可运行 FastAPI 基础项目与环境 | 健康检查、安装、配置加载 | Agent factory/依赖布局 |
-| P01 单 Agent | 模型→工具→模型最小循环 | 真实 Tool Call、参数/失败 | Lead Agent、factory |
-| P02 API/会话/Web 最小版 | Thread、Run、SQLite Checkpoint、SSE、薄聊天 UI | 新 Run/Thread API、当前 SSE 和状态保存 | runtime/runs、checkpointer、Gateway |
+| P01 单 Agent + 极简 Web | 模型→工具→模型 + 健康/计算/问答/工具轨迹页面 | 真 Tool Call、参数/失败、当前 UI | Lead Agent、factory |
+| P02 会话/Run/SSE | 在 P01 极简 Web 上增加 Thread、Run、SQLite Checkpoint、SSE | 新 Run/Thread API、当前 SSE 和状态保存 | runtime/runs、checkpointer、Gateway |
 | P03 Workspace | 上传、受控读写、Artifact 下载 | 当前文件工具与路径安全 | sandbox、uploads/artifacts |
 | P04 Todo / Sub-Agent | 动态 Todo、有限并发委派与汇总 | 当前 Todo/Task、超时/隔离 | todo、task_tool、executor |
 | P05 MCP / Skills | 外部工具注册、SKILL.md 按需加载 | 新 MCP/Skill 和工具权限 | tools/mcp/skills |
@@ -130,7 +130,7 @@ Codex 报告必须明确列出“本次改了什么 → 测了哪些 → 为什�
 
 ### P00 — 工程初始化（2026-11-05 当前阶段正式编码方案）
 
-**阶段状态：设计已确认（PLAN_READY），已获准交给 Codex 实施；实际代码尚未开始。**  
+**阶段状态：P00 代码已完成并进入 main；以下保留当时已批准的实施规格供历史复核。**  
 **阶段范围**：仅从仓库文档创建可安装的 Python 3.12 后端包，启动 FastAPI `GET /health`，配置本地环境、依赖锁、局部测试、Git 安全及 PyCharm 调试。**不调用 LLM，不安装 LangGraph，不做数据库/前端/MCP/Agent**。  
 **重要约束**：本节是经当前仓库实态复核的 P00 最终实施规格；后续阶段的逐文件规划仍须届时重新设计审核。Codex 按本节落地，不重新进行技术选型。
 
@@ -352,28 +352,89 @@ Git 检查在仓库根目录执行：`git status --short`、`git check-ignore ba
 > 从当前已克隆的 GitHub 仓库开始，只实施 `docs/DEVELOPMENT.md` 的 **P00-A 至 P00-G**。当前阶段方案已批准。请勿重新设计架构。首先检查 Git 和现有文件，若尚未克隆则告诉我如何克隆（当前没有本地仓库时不要凭空声称已操作）。在 `feat/p00-bootstrap` 分支按规定文件创建 Python 3.12 + uv 的可安装 `minideerflow` 包、FastAPI `/health`、简明 Settings、局部 pytest 与 Ruff、.env.example、.gitignore。仅运行 P00 本次新增内容的检查，更新 README 和 docs/progress/P00.md，提交并尽可能推送开发分支。完成后提供真实命令/结果/完整 Commit SHA 并停止；不要合并 main 或进入 P01。
 
 
-### P01 — 最小可运行 Agent（Model → Tool → Model）
+### P01 — 单 Agent + 极简 Web 验证台（2026-11-05 实施合同）
 
-**业务链**：用户给出文本 → `LeadAgent` 收到消息 → 模型自行决定直接答复或调用 `calculate` → 工具执行 → ToolMessage 回模型 → 返回答复。此阶段 CLI 验证即可，不加 Thread/Run/数据库。
+**阶段状态：PLAN_READY（方案已按用户“继续完成 P01、最小 Demo 后才手测、每次同步前端”的新要求细化；尚未编码）。** 这是 P01 的正式执行规格，优先于早期 CLI-only 大纲。P00 后端代码已在 main；P01 不需重新初始化。
 
-**固定技术**：`langchain`（`create_agent`）、`langchain-openai`（`ChatOpenAI`）、LangGraph 由 Agent 内部使用；不要自己画固定 Planner/Executor 图。使用环境变量 `MODEL_NAME`、`MODEL_API_KEY`、`MODEL_BASE_URL`。模型不支持 Tool Calling 则 Smoke 标记 BLOCKED，不能假装工具运行成功。
+#### P01-1. 目标、范围与流程
 
-| 新增/修改文件 | 编码必须完成的具体内容 |
+**可运行 Demo 主线**：本地 Vite 页面展示服务健康状态；输入算式，点击后看到安全计算结果/错误；输入“请计算 (12+8)*3”，后端使用已配置的真实 Tool Calling 模型调用 `calculate`，LangChain Agent 将 ToolMessage 回馈模型，再由模型生成最后回答；页面分别展示**最终答复**和**来自实际消息的工具名称、参数、结果、是否成功**。普通问答允许不触发工具，绝不虚构调用轨迹。CLI 可作为同一 Agent 服务的轻量入口。
+
+此阶段的结果是一次独立、同步等待的 HTTP 请求，不创造 Thread/Run ID，不持久化消息或事件，不使用 Checkpointer，不做 SSE、多 Agent、Todo、MCP、Skills、文件工作区、上传、RAG、后台任务或鉴权平台。这些归 P02 及以后。**仅监听本机回环接口**。健康检查不依赖密钥，没配置模型时页面健康/计算器依旧正常，Agent 入口清晰报 MODEL_NOT_CONFIGURED。P01 不是最终多智能体系统。
+
+#### P01-2. 工程基线与官方参考
+
+已核实 main 存在：`backend/src/minideerflow/main.py`（`create_app`+`GET /health`）、`config.py`（`Settings`+`get_settings`）、`backend/pyproject.toml`、`backend/uv.lock`、`tests/test_health.py`、`tests/test_config.py`。P00 锁定 Python 3.12；当前未安装 langchain/langgraph/langchain-openai，也没有 API、Agent、Tool、CLI、frontend 目录。
+
+- DeerFlow v2.0.0 固定源码 `backend/packages/harness/deerflow/agents/factory.py`：观察 `create_deerflow_agent` 如何以 `model/tools/system_prompt/checkpointer` 参数调用 `langchain.agents.create_agent`；本阶段**只保留这个装配思路**，不复制 feature/middleware 堆栈。
+- 同标签 `backend/packages/harness/deerflow/agents/lead_agent/agent.py`：观察 Lead Agent 组织与运行时依赖注入；不引入 DeerFlow 配置、状态、Todo、Subagent、Gateway 或 tracing。
+- LangChain 官方 `https://docs.langchain.com/oss/python/langchain/agents` 与 `https://docs.langchain.com/oss/python/integrations/chat/openai`：确认已锁定版本的 `create_agent` / `ChatOpenAI` / `@tool` / `ainvoke` / `AIMessage.tool_calls` / `ToolMessage.tool_call_id` 实际签名。细小版本参数差异允许等价调整并记入进度；不得借此更换架构。
+
+#### P01-3. 接口合同（先确定，Codex 只实现）
+
+1. `GET /health`：保留现有 `{"status":"ok"}`，不能因为 Agent 配置缺失而失败。
+2. `POST /api/demo/calculate`：body `{"expression":"(12+8)*3"}`；成功 HTTP 200 `{"result":"60"}`；无效表达式 HTTP 422 `{"detail":{"code":"CALC_INVALID_EXPRESSION|CALC_DIV_ZERO|CALC_TOO_LONG|CALC_OUT_OF_RANGE","message":"..."}}`。不走模型。
+3. `POST /api/demo/agent`：body `{"message":"请计算 (12+8)*3"}`；成功 HTTP 200 `{"answer":"...","tool_calls":[{"name":"calculate","args":{"expression":"..."},"result":"60","ok":true}]}`。`tool_calls` 数组按实际执行顺序，普通问答为空数组，不可模拟或编造。模型未配置 HTTP 503 `MODEL_NOT_CONFIGURED`；模型超时 HTTP 504 `MODEL_TIMEOUT`；上游鉴权/网络/协议或运行失败 HTTP 502 `MODEL_UPSTREAM_ERROR` 或 `AGENT_EXECUTION_FAILED`，只返回脱敏短消息，不向前端透传 key、授权请求头、原始异常字符串或内部堆栈。请求正文空白/超过 2000 字符一律 HTTP 422（Pydantic 允许附带自己的 validation detail）。
+4. Tool 消息错误必须可辨别（如 `ERROR[CALC_DIV_ZERO]: division by zero`）；HTTP 计算接口使用同一个纯函数并将错误翻译成 422；Agent 调用工具若报可恢复计算错误，应返回错误 ToolMessage 让模型解释，不视为成功结果；链路不得因为工具无效输入而崩溃。
+5. 除 `/health` 外，这两个 `/api/demo/*` 是 P01 **临时调试入口**；P02 在复用底层 AgentService 的基础上加正式 `/api/threads`/`/api/runs`，不要扩展临时接口为持久运行协议。
+
+#### P01-4. 逐文件实施规格
+
+| 文件（相对仓库根） | 必须承担的实现与接口 |
 | --- | --- |
-| `core/model.py` | `build_chat_model(settings) -> BaseChatModel`。只负责配置 `ChatOpenAI`（model/key/base_url/timeout）；缺 key 或 model 时抛出可读配置错误；不在 import 阶段读取/连接模型。 |
-| `agents/lead.py` | `build_lead_agent(model, tools, checkpointer=None)`：调用 `langchain.agents.create_agent`，配置简短系统提示、工具集合与可选 Checkpointer；返回框架可运行 Agent，不手写第二套 Agent 循环。 |
-| `tools/calculator.py` | `calculate(expression: str)`：只允许数字、小数、四则、括号、有限一元正负，使用显式 AST 白名单解析，**禁止 eval、exec 与任意函数调用**。结果为字符串或结构化 ToolResult；非法表达式返回确定性错误。 |
-| `cli.py` | 从终端读取一个输入，构造模型与工具，`agent.ainvoke({"messages":[...]})`，输出最终 assistant 内容；隐藏 key，错误返回非零退出码。 |
-| `core/config.py` | 基于 P00 配置对象增补模型参数与校验，保留无模型 Key 仍可运行 `/health` 的性质；只有调用 Agent 时才必须提供密钥。 |
-| `tests/test_calculator.py` | 正常算式、除零、非法字符、函数调用、超长表达式。 |
-| `tests/test_lead.py` | Mock ChatModel 验证一次无工具回答和一次 Tool Call/ToolMessage 循环；不依赖网络。 |
-| `README.md` | 加入仅 P01 实际成功验证过的 CLI 用法与模型配置，不声称尚未实现 Web。 |
+| `backend/pyproject.toml`, `backend/uv.lock` | 增加 `langchain`、`langchain-openai`、`langgraph` 依赖，`uv lock` 真实锁定后 `uv sync --locked --group dev` 验证；不顺手升级无关 P00 依赖；遇到兼容问题记录具体版本与调整。 |
+| `backend/src/minideerflow/config.py` | **继续使用 P00 此文件，不另建 core/config.py**。扩展 `model_name: str|None`、`model_api_key: SecretStr|None`、`model_base_url: str|None`；可加固定默认 model_timeout_seconds=45。Settings 构建时**不强制** model key；Agent 工厂调用时才校验非空 model/key。任何异常/log/JSON 不得输出完整 key。 |
+| `backend/src/minideerflow/core/model.py` | `build_chat_model(settings: Settings) -> BaseChatModel`，唯一模型构造点，实例化 `langchain_openai.ChatOpenAI`；按实际锁定 API 传 `model`, `api_key`, 可选 `base_url`, 超时与低重试次数；无 key/model 抛出 `ModelNotConfigured`（独立可捕获的内部错误）。无启动阶段网络连接。 |
+| `backend/src/minideerflow/tools/calculator.py` | `safe_calculate(expression: str) -> str` 是无副作用纯函数；另提供 LangChain `@tool` 修饰的 `calculate(expression: str) -> str`。使用 `ast.parse(..., mode="eval")` + **递归 AST 白名单**：数字常量（排除 bool）、`+ - * /`、一元正负、括号；拒绝 Name、Call、Pow、FloorDiv、Mod、容器、比较等；禁用 eval/exec。限制原表达式 128 字符，数值与中间结果绝对值 ≤ 10^12，拒绝非有限数和零除；返回简洁数字字符串。错误使用 `CalculatorError(code,message)`；`calculate` 工具将错误转为 `ERROR[code]: message`，而非 Python Traceback；校验最大表达式长度在 ast.parse 前。 |
+| `backend/src/minideerflow/agents/lead.py` | `build_lead_agent(model, tools)` 仅调用 `langchain.agents.create_agent(model=...,tools=...,system_prompt=...)`。短提示词：直接答复普通问题；需要精确运算时调用 calculate；不能声称未发生的工具调用。不用自写 StateGraph/while 循环；不使用 checkpoint/middleware/subagents。 |
+| `backend/src/minideerflow/agents/service.py` | `async run_agent_once(message: str, *, model: BaseChatModel|None=None) -> AgentResponse`（注入 FakeChatModel 的测试口）。空/过长输入拒绝；若未注入 model，再用 Settings+build_chat_model；通过 `agent.ainvoke({"messages":[{"role":"user","content":message}]}, config={"recursion_limit":12})` 触发一轮请求。解析实际 AIMessage 的 tool_calls 与匹配 tool_call_id 的 ToolMessage；有多次调用则按完成的 ToolMessage 顺序输出轨迹；含 `ERROR[...]` 的结果 ok=false；只有最后一个没有待处理 Tool Call 的 AIMessage 可作答；无法得到最终答复应返回明确执行错误，不能编造。限制请求范围、仅发送当前用户消息，**不储存聊天记录**。 |
+| `backend/src/minideerflow/api/demo.py` | Pydantic request/response schema、`APIRouter(prefix="/api/demo")`、calculate/agent 端点和受控错误映射；仅薄 Router，不直接实例化 OpenAI 模型或重写 Agent 逻辑；测试中可 monkeypatch `run_agent_once`。 |
+| `backend/src/minideerflow/main.py` | 在 `create_app()` 内包含 demo router，保留原有 health 原语义；缺模型配置时应用仍成功启动。 |
+| `backend/src/minideerflow/cli.py` | `uv run python -m minideerflow.cli "请计算 (12+8)*3"`：只调用与 HTTP 同一 AgentService，打印 answer 和可读工具轨迹，失败 stderr + 非零码，不打印 key；不需要多轮终端交互。 |
+| `backend/tests/test_calculator.py` | 安全计算：括号/负数/小数、优先级、零除、恶意 Call/Name/Pow、超长、溢出、bool/非数、输出稳定。 |
+| `backend/tests/test_lead.py` | **Mock** 模型脚本驱动：无工具回复，AIMessage(tool_calls)→ToolMessage→模型最终回复；断言实际 tool_call_id 匹配、轨迹真实、计算失败得到 ToolMessage 错误而非虚构成功；Mock 需要按已锁定版本实现 bind_tools，不调用外网。 |
+| `backend/tests/test_demo_api.py`、`backend/tests/test_config.py` | 两临时 API 的 200/422/503/脱敏错误及请求校验；配置无 key 时 `/health` 仍可启动；使用被测对象的依赖注入/monkeypatch，禁止真实消费额度。 |
+| `frontend/package.json`, `frontend/package-lock.json`, `frontend/tsconfig.json`, `frontend/vite.config.ts`, `frontend/index.html` | React + TypeScript + Vite 最小应用；npm lock 真实生成；本地 Vite dev server 默认 127.0.0.1:5173；把 `/health` 与 `/api` 代理到 127.0.0.1:8000，不需要 CORS、不配置任何模型 key 到 Vite。最小 npm scripts `dev`,`build`。 |
+| `frontend/src/main.tsx`, `frontend/src/App.tsx`, `frontend/src/api.ts`, `frontend/src/styles.css` | 一个轻量测试页，不搭复杂路由/UI 库：健康检查（真实 `/health`）、计算器（输入+显示结果/错误）、Agent 问答（输入、等待态、最终回答）、**真实工具调用轨迹**（名称、输入、结果/失败）；每块独立按钮及失败提示。提供“当前已实现：P00 健康/P01 计算/P01 Agent”“后续：会话、SSE、Todo、文件”等静态能力导航，未实现区域禁用/标注，不显示伪结果；禁止 dangerouslySetInnerHTML。 |
+| `.env.example`, `README.md`, `.gitignore` | 环境模板新增 MODEL_NAME、MODEL_API_KEY（留空占位）、MODEL_BASE_URL；P00 不自动加载 .env，文档明确使用 shell export/PyCharm env；README 只记录**真实已验证**的两终端启动、配置、API/CLI/前端 build、局部测试，说明真实模型需具备 Tool Calling；忽略 `frontend/node_modules`, `frontend/dist`，不要忽略 lockfile。 |
+| `docs/progress/P01.md` | 每子任务记录真实文件、局部测试命令与结果、SHA、模型 Smoke 证据（不得泄 key）、功能与页面对应关系；未实测项目如实写未验证，完工转 PENDING_REVIEW，用户审核后 ACCEPTED。 |
 
-**实现次序**：P01-A 添加 ModelFactory 与一个工具 → P01-B build_lead_agent/CLI 与 Mock 测试 → P01-C 有真实 Key 时做一次合法 Tool Calling Smoke。按 P01-A、B、C 小任务逐个交付，不得一次性引入 MCP 或 Sub-Agent。
+`__init__.py` 只在新包需要时建立；如实际需单独 `schemas.py`/异常类，优先留在上述已有文件，若跨两处共享且不可避免可新增一个小文件，并在进度解释原因。不要生成空目录占位。
 
-**局部验收**：实际看到模型产生的 `tool_call`、工具执行结果和最终答复；`uv run pytest tests/test_calculator.py tests/test_lead.py`，以及受影响的 config 测试。健康检查没有因新增配置被破坏时只补直接受影响测试。**P01 代码接口的 Tool 类型/Agent 构造以已安装依赖的实际签名为准，必要的兼容修正须报告，不授权改变架构。**
+#### P01-5. 业务链路与一致性边界
 
-**DeerFlow 参考**：`backend/packages/harness/deerflow/agents/factory.py`、`agents/lead_agent/agent.py`（两路径均以前缀 `backend/packages/harness/deerflow/` 为根）。
+```text
+Browser -- fetch --> FastAPI /api/demo/agent --> AgentService.run_agent_once
+  --> ModelFactory(ChatOpenAI) --> LangChain create_agent
+  --> AIMessage.tool_calls(name=calculate,args,id)
+  --> @tool calculate --> safe_calculate(AST) --> ToolMessage(tool_call_id=id)
+  --> Model receives ToolMessage --> final AIMessage
+  --> AgentService extracts answer + ACTUAL tool trace --> JSON --> Browser
+
+Browser -- fetch --> /api/demo/calculate --> safe_calculate(AST) --> JSON
+Browser -- fetch --> /health --> existing P00 health --> JSON
+CLI ---------------------> AgentService.run_agent_once (same path as HTTP)
+```
+
+**执行边界**：客户端只传字符串，不传 Tool 名称/任意 Python 表达式/Provider Key；服务端只有 calculate 一个授权工具；单次同步 Agent 请求有模型超时与递归步数上限，客户端重复点击时用 `disabled/loading` 防止叠加请求（不承诺全局并发限额）。P01 Tool Trace 仅从已经发生的框架消息生成，后续 P02 再统一 SSE/RunEvent。P01 只对可信本机开放，绝不部署公网无鉴权 API。面向上游的错误不写出私人数据；日志与 HTTP 返回不包含 MODEL_API_KEY。
+
+**关于工具结果**：P01 面向模型仅返回字符串/错误字符串，P03 起引入全局 `ToolResult` 协议；不可在 P01 假装完整 Tool Policy、重试或 side-effect-unknown 已实现。
+
+#### P01-6. 编码任务、前端同步与停止条件
+
+**P01-A 计算器 + 初始 Web 壳**：新增计算纯函数和 LangChain 工具、独立 HTTP calculate、主程序路由、Pytest；前端搭建 React/Vite，放 `/health` + calculate 两块可操作区域，Agent 标记未实现；更新相应环境/忽略配置。先以不配置模型的环境完成实际健康+计算 API 局部 Smoke 和 npm build。A 未通过时不进行 B。
+
+**P01-B 单 Agent + Web Agent 区块**：加入模型配置/Factory、LeadAgent、AgentService、CLI 和 Agent HTTP；前端新增问答及真实 Tool Trace。Mock 无工具/工具循环/失败/参数边界；更新直接受影响的 config、health 与 API 测试，npm build；无 key 场景返回 503。不得把 Mock 当真实模型调用。
+
+**P01-C 真模型 Smoke + Demo 交付**：在用户本地已有可用的 MODEL_* 环境且模型经确认为支持 Tool Calling 时，用正常问答和一次必须真正计算的问题调用实际 HTTP/CLI；保存非敏感证据：请求、状态码、实际 tool call 名称、参数、result、最终回答；**不保存密钥、原始认证头、模型隐藏内容**。如果没有 key 或 Provider 不支持，则如实记 `REAL_MODEL_SMOKE_BLOCKED`，不得把 Demo 标记为“真实 Agent 已验证”；其余无需模型的健康/计算/静态前端可以通过。更新 README 与 P01 进度，核验 demo 页面展示的是确实已实现功能。**用户直到 P01 最小 Demo 交付后才亲自手动测试**；Codex 在开发期间仍须独立运行新增/修改功能的局部测试和必要 Smoke。
+
+**P01 的交付结果只能表述为**：静态前端/计算器已验证；Mock Agent 测试已验证；真实 Tool Calling Smoke 已验证或明确阻塞——三者分别汇报，不合并成一句“全部通过”。出现外部接口/架构变更、真实模型不支持 Tool Calling 或关键兼容失败，记录 BLOCKED 并停止相关部分；不自主转向其它模型框架/供应商、不开 P02。
+
+**全阶段前端规则自 P01 生效**：此后 P02–P09 每完成一个开发任务，必须在同一提交/任务里同步更新极简 Web 工作台，让本地**实际已经实现并已验证的用户可见能力**可单独操作/观测；涉及旧面板的接口修改同步调整调用及状态；仅内部基础设施变更且不存在可见操作时，在进度解释“为什么无 UI 改动”。禁止先把新后端功能做完、多个阶段后才补前端；禁止为展示效果写 mock/硬编码假数据并冒充真实能力。P02 在 P01 页面的基础上逐步增加 Thread/Run、SSE、Checkpoint，不重起另一套 UI。
+
+**局部验证最小命令（在 backend/ 下）**：`uv sync --locked --group dev`；`uv run pytest -q tests/test_calculator.py tests/test_lead.py tests/test_demo_api.py tests/test_config.py tests/test_health.py`（只选本次确实新增/直接受影响文件，A、B 分开执行）；`uv run ruff check src tests` 与 `uv run ruff format --check src tests`（作用于本阶段实际修改文件为佳）。`frontend/` 下 `npm ci && npm run build`，本机 `uvicorn` + Vite 并用 HTTP 检查 `/health`、`/api/demo/calculate`、`/api/demo/agent` 无密钥错误响应。真实模型 Smoke 仅当可用密钥存在且不产生隐私泄漏时运行。
+
+**Git 操作**：从更新后的 main fast-forward 拉取，检查未提交工作后建/复用 `feat/p01-single-agent-web`；Codex 依 A→B→C 顺序实施并保持每个任务的前端与后端同步、分别做小提交，最后推送该分支（失败如实报错），记录 SHA/局部测试。不要 reset/clean/force push，不覆盖用户在本地的变更。阶段结束标记 PENDING_REVIEW，等待用户基于 Demo 进行审核；未获批准不进入 P02。
 
 ### P02 — Thread / Run / SQLite Checkpoint / SSE / 极简 Web
 
