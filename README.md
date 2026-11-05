@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**方案已确定，业务开发尚未开始。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P00 工程初始化已实现并完成本地验证，待用户审核；业务开发尚未开始。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -35,6 +35,29 @@
 | [完整开发方案](docs/DEVELOPMENT.md) | P00–P09 增量开发任务、局部测试规则、每阶段验收、Codex 协作 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
-**执行原则**：一次一个阶段中的一个小任务；先最小可运行链路；测试当前变更；记录 Git SHA 和真实结果；等用户审核通过再继续。P00 尚未启动。
+**执行原则**：一次一个阶段中的一个小任务；先最小可运行链路；测试当前变更；记录 Git SHA 和真实结果；等用户审核通过再继续。P00 等待审核，不进入 P01。
+
+## P00 本地开发
+
+已验证环境：macOS、uv 0.11.7、Python 3.12.13；项目要求 Python 3.12，环境位于 `backend/.venv/`。在仓库根目录进入后端后执行：
+
+```bash
+cd backend
+uv sync --group dev
+uv sync --locked --group dev
+uv run python -c "import minideerflow; from minideerflow.main import app; print(app.title)"
+uv run pytest -q tests/test_health.py tests/test_config.py
+uv run ruff check src tests
+uv run ruff format --check src tests
+uv run uvicorn minideerflow.main:app --host 127.0.0.1 --port 8000
+```
+
+另一个终端进入 `backend/` 后执行 `curl -i http://127.0.0.1:8000/health`，实测返回 HTTP 200 和 `{"status":"ok"}`。终端按 Ctrl+C 停止服务。局部测试实测 4 passed；当前锁定的 Starlette/httpx 组合有 1 条 TestClient 弃用警告，详见 P00 进度。
+
+配置只有 `APP_ENV`（默认 `development`）和 `LOG_LEVEL`（默认 `INFO`）。根目录 `.env.example` 仅为模板，P00 不自动加载 `.env`；需通过终端 `export` 或 PyCharm Environment Variables 设置。
+
+PyCharm 打开整个仓库，将解释器设为 `<仓库>/backend/.venv/bin/python`；创建 Python Run/Debug 配置，Module 为 `uvicorn`，Parameters 为 `minideerflow.main:app --host 127.0.0.1 --port 8000`，Working Directory 为 `<仓库>/backend`，不加 `--reload`。在 `main.py` 的 health 返回行设断点，再发起上述 curl 请求验证；**图形界面配置和断点命中待用户实测**。
+
+当前 `/health` 只表示进程存活；尚未实现模型调用、Agent、数据库、SSE、前端及其它 P01–P09 功能。
 
 参考上游：[bytedance/deer-flow v2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，固定 commit 为 `7e7f0410797693cf882594555ba414e0361d4c6f`。参考实现不等于复用全部源码；实际复制或改编受许可代码时保留适用的 MIT 版权与许可声明。
