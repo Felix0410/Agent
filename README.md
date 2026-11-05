@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P01 单 Agent + 极简 Web 验证台已实现，待审核；计算器/页面和 Mock Agent 已验证，真实模型 Smoke 因未配置 MODEL_* 而阻塞。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P01 单 Agent + 极简 Web 验证台已实现，待审核；计算器/页面和 Mock Agent 已验证，AgentService 真实模型问答及工具调用已验证，配置修正后的 Web/CLI 待复核。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -99,7 +99,7 @@ curl -i -H 'Content-Type: application/json' -d '{"message":"hello"}' http://127.
 
 分别返回 200/`ok`、200/`60`、503/`MODEL_NOT_CONFIGURED`。直接计算仅支持数字、括号、`+ - * /` 与一元正负，最长 128 字符，数值及中间值绝对值不超过 10^12；计算错误返回 422。
 
-使用真实 Agent 前，在**仓库根目录 `.env`** 配置 `MODEL_NAME`、`MODEL_API_KEY`，按提供方需要配置 `MODEL_BASE_URL`。提供方必须支持 Tool Calling；密钥仅留在后端，不放进前端。默认单次请求超时 45 秒、无 SDK 重试、图递归限制 12。本次未提供真实模型配置，**REAL_MODEL_SMOKE_BLOCKED：未验证任何真实提供方或真实模型工具调用**。
+使用真实 Agent 前，在**仓库根目录 `.env`** 配置 `MODEL_NAME`、`MODEL_API_KEY`，按提供方需要配置 `MODEL_BASE_URL`。基础地址通常以 `/v1` 结尾，不要包含 `/chat/completions`，SDK 会自动追加端点。提供方必须支持 Tool Calling；密钥仅留在后端，不放进前端。默认单次请求超时 45 秒、无 SDK 重试、图递归限制 12。初次交付时真实模型未配置；后续修正本地基础地址后，已通过 AgentService 实测普通问答及 calculate 工具调用（结果 60）。运行中的后端需重启以读取新配置。
 
 CLI 与 HTTP 复用同一 AgentService。在 `backend/` 执行：
 
