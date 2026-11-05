@@ -1,3 +1,5 @@
+"""P01 本地演示接口：健康检查以外的计算和 Agent 请求入口。"""
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
@@ -10,6 +12,7 @@ from minideerflow.agents.service import (
 from minideerflow.core.model import ModelNotConfigured
 from minideerflow.tools.calculator import CalculatorError, safe_calculate
 
+# P01 的临时调试路由；P02 再引入正式 Thread / Run 协议。
 router = APIRouter(prefix="/api/demo")
 
 
@@ -32,8 +35,10 @@ class AgentRequest(BaseModel):
 
 @router.post("/agent", response_model=AgentResponse)
 async def agent_endpoint(request: AgentRequest) -> AgentResponse:
+    """返回一次 Agent 执行结果，统一转换模型缺失、超时与上游错误。"""
     try:
         return await run_agent_once(request.message)
+    # 业务错误只映射为稳定状态码与短消息，不向浏览器传递内部异常。
     except ModelNotConfigured:
         raise HTTPException(
             503,
@@ -46,6 +51,7 @@ async def agent_endpoint(request: AgentRequest) -> AgentResponse:
 
 @router.post("/calculate", response_model=CalculateResponse)
 async def calculate_endpoint(request: CalculateRequest) -> CalculateResponse:
+    """直接调用计算纯函数；错误以可区分的 422 业务码返回。"""
     try:
         return CalculateResponse(result=safe_calculate(request.expression))
     except CalculatorError as exc:
