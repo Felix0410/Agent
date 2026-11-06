@@ -717,27 +717,130 @@ P02 已有：`src/minideerflow/main.py`（FastAPI lifespan，`AsyncExitStack`、
 **停止条件**：若本地平台不支持所要求的原子 no-follow 路径安全、官方 Runtime Context 隐式 Tool 注入无法与锁定版本兼容、任何 Thread 跨越/覆盖风险或关键测试失败，**停止下一子任务**、提供复现证据并等用户决定。不能通过松绑安全约束“把功能跑起来”。所有测试用临时两库/临时工作区、Fake 模型，不读写用户真实文件/密钥，不记录上传正文到日志；Git 不跟踪 workspace 文件。用户授权启动 P03 设计，**不表示允许自行合并 P02 到 main、清除 P02 审核状态或自动开始 P04**。
 
 
-### P04 — Todo 规划、任务委派与 Sub-Agent
+### P04 — Todo 规划 / task 委派 / Sub-Agent（2026-11-06 正式详细设计）
 
-**业务链**：复杂目标 → 模型调用 `write_todos` 更新结构化计划 → `task` 工具指定角色和任务目标 → Dispatcher 限制并发、裁剪上下文、构造子 Agent → 子 Agent 调用允许的 Tool → 返回短摘要+证据/文件引用 → Lead 汇总。简单问题不需要强制规划。
+> **P04 当前为 PLAN_READY：仅设计与 GitHub 任务合同完成，尚无 P04 新增业务代码或测试。** 用户请求“设计 p4”，并未确认 P02/P03 亲自验收通过；两阶段各自 `PENDING_REVIEW` 保留。新分支 `feat/p04-planning-subagents` 从包含 P01–P03 实际代码的 `feat/p03-workspace-artifacts` 派生，绝不从 `main`（缺前期实现）重新建工程。
+>
+> **Codex 可执行任务**：[P04-A/B/C/D 连续逐文件合同](tasks/P04-ABCD.md)。先确认阶段设计，再由 Codex 实施；A→B→C→D 各自局部测试、提交、同步前端，遇关键失败立即停止，不自动进入 P05。
 
-| 新增/修改文件 | 编码必须完成的具体内容 |
-| --- | --- |
-| `agents/state.py` | 基于实际 LangChain AgentState 扩展 `todos`；字段为 `todo_id,title,status`，合并规则必须保证更新同 ID 而非无限追加；并发更新先在父 Agent 串行归并。 |
-| `tools/todo_tool.py` | `write_todos(items)` 验证状态 `pending/in_progress/completed`、合法 ID 和一次更新数上限；写入真实 State 并发布 todo_updated，禁止只输出自然语言 Todo。 |
-| `agents/subagents/config.py` | 固定 general、research 两种 `SubAgentSpec`：name/system_prompt/allowed_tools/max_steps/timeout；初版禁止子 Agent 继续使用 task。 |
-| `agents/subagents/dispatcher.py` | `dispatch(spec,input,parent_context)->TaskResult`；`asyncio.Semaphore(3)` 限制每 Run 总并发；使用子代理独立 messages，不拷贝父完整聊天日志；工具集取父授权与角色 allowlist **交集**。 |
-| `agents/subagents/executor.py` | 使用 P01 Agent 工厂构建 child Agent，**不复用父 Checkpointer**（可设 False/None，以已锁版本实际语义为准），执行 asyncio 超时和错误归一；返回摘要、状态、证据/产物 ID，不能把完整子代理对话塞回父状态。 |
-| `tools/task_tool.py` | 模型可调用的 `task(agent_type,description)`，由当前 Runtime 注入 task_id/run_id/权限上下文，不读取随意的全局单例；返回可序列化任务摘要。 |
-| `runtime/task_registry.py` | 进程内 TaskRecord 生命周期 PENDING/RUNNING/COMPLETED/FAILED/CANCELLED/TIMED_OUT，输出对应 run 事件；默认无跨重启保证。 |
-| `frontend/src/components/TodoPanel.tsx`、`TaskPanel.tsx` | 按 todo_updated/subtask_* 更新视图；不靠模型文本判断子任务终态。 |
-| `tests/test_todos.py`、`tests/test_subagents.py` | 同 ID Todo 更新、非法转移、实际委派、角色权限、并发上限、超时、任务失败、父子 Checkpointer 隔离。 |
+#### 1. 本阶段用户业务与明确边界
 
-**默认约束**：`MAX_SUBAGENT_CONCURRENCY=3`、`MAX_DELEGATION_DEPTH=1`，每个子任务有 `max_steps` 和超时；子 Agent 默认只读 Workspace，写文件需要单独明确授权以避免并发覆盖。子任务结果未知要标记 UNKNOWN/FAILED 类别，不因为父模型在报告中写“已完成”就更改真实状态。
+**主流程**：用户向当前 Thread 提交复杂目标 → Lead Agent 自行判断要不要计划 → 调用真实 `write_todos` 将计划写入 LangGraph State 并将**当前 Run Todo 快照**记入 SQLite → Lead 用 `task(agent_type,description,todo_id?)` 委派角色 → Dispatcher 限额启动完全隔离的 child `create_agent` → 子 Agent 用允许的真实工具执行 → 系统记录 Task 状态/短结果/来源文件 ID，向同一个父 Run 的 SSE 发布变化 → Lead 收到工具回执后汇总，页面同时显示 Todo、子任务状态与原有流式回答、Artifact。
 
-**实现次序**：P04-A Todo Tool/State → P04-B 一个串行子代理 → P04-C 三个并发以内、超时/取消/事件 → P04-D UI 与受影响合同测试。禁止把调度改成大型任务队列或随意扩展角色列表。
+**简单问题不强制规划/委派**：例如“你好”“计算 1+2”直接沿用 P02/P03 主 Agent 逻辑，通常不触发新工具。**不做**：自主后台离线子任务、跨进程/分布式 Task 队列、子 Agent 再委派、动态创建无限角色、外网搜索/RAG/MCP（P05及以后才有）、批准后重放/精确 Checkpoint 恢复、任意 shell 或 Python。用户可中断浏览器 SSE，但 P04 **不新增**服务端取消按钮/API；P02 Run 超时/进程关闭会取消当次内部子 Agent，按既定保守恢复策略处理。
 
-**DeerFlow 参考**：`agents/middlewares/todo_middleware.py`、`tools/builtins/task_tool.py`、`subagents/executor.py`，注意这些文件根路径均为 `backend/packages/harness/deerflow/`。父图 Checkpoint 不保证进程内子任务精确恢复。
+**角色仅有** `general` 与 `research`：
+- `general`：通用归纳、精确计算、当前 Thread 文本读取；**工具仅** `calculate/list_files/read_text`。
+- `research`：针对用户已经给出的信息、当前 Thread 已上传文本做分析、差异整理、证据提取；**工具仅** `list_files/read_text`。名称“research”不代表已具备联网检索，必须在 Prompt/前端清楚说明本期仅基于已有材料；不能制造 URL、声称在线调研。
+- 两者都**没有** `task/write_todos/write_text`，不直接生成 Artifact；Lead 仍保留 P03 `write_text` 来汇总后生成最终文件。子任务默认只读 Workspace，这避免并发覆盖文件及来源不清。
+
+**业务验收示例**：用户上传一份 `notes.md`，请求“将文档的核心观点、潜在问题分别分析，最后创建 summary.md”，Lead 写结构化 Todo → 两次真实 `task` 委派 → 子 Agent 用 `read_text` 获取同一 Thread 已登记文件 → Lead 接收两份短结果并调用 `write_text` → 前端展示 Todo、任务完成状态及实际 Artifact 下载。模型不按预期调用工具时需如实记录，不能伪造多 Agent Demo。
+
+#### 2. 现有代码接入与关键设计选择
+
+P03 实际已有 `agents/lead.py:build_lead_agent(model,tools,checkpointer,context_schema)`，`runtime/runner.py:RunService._execute_run()`，`runtime/streaming.py:stream_agent(...,context)`，`runtime/events.py:EventBus`，`runtime/repository.py:RuntimeRepository`，`runtime/db.py:RuntimeDatabase`，`workspace/models.py:WorkspaceContext`（frozen dataclass，`thread_id/run_id/workspace_service`），`tools/file_tools.py` 的 `ToolRuntime[WorkspaceContext]` 权限校验与 `calculate`；React ChatPanel/RunStatus/SSE/FilesPanel。P04 **复用**所有上述能力，不复制第二套数据库、消息系统或 Agent 事件桥接。
+
+采用**父 Agent 工具型 Supervisor**，不另起新 StateGraph 分支架构；子代理通过 `task` 工具在父 Agent ToolNode 内 await 子 Agent，多个 tool_call 可并发执行，但父 Agent 要等待结果才继续。与 P02 后台 Run 不同：P04 的 child `async def` 只是异步 I/O，不表示主 Agent 可在子任务运行期间另开新的同 Thread Run。
+
+**可信上下文**：新增 `AgentRunContext(WorkspaceContext)`，包含 `todo_service`、`task_dispatcher`、`event_sink` 等依赖，全部仅由 `RunService` 在真正的 `run_id/thread_id` 下生成。P03 文件工具对 `WorkspaceContext` 的 `isinstance` 校验必须仍成功；模型可见 `task` 参数中不包含可信身份。子 Agent 单独使用 `ChildContext(WorkspaceContext)`，其 `run_id` 必须指向**父真实 Run**以便受控只读工具校验；子 Agent 不获得 task_dispatcher、不包含 write 类工具。任何伪造 Context/跨 Thread/file_id 都应失败。
+
+**Graph State 与可恢复页面**：`agents/state.py` 扩展已锁版本 `langchain.agents.AgentState`，加入 `todos: NotRequired[list[TodoItem]]`，通过 `state_schema` 传给父 `create_agent`；`write_todos` 返回 `langgraph.types.Command(update={"todos":完整列表,"messages":[ToolMessage(tool_call_id=runtime.tool_call_id,...)]})`。这一更新应在同 Thread 官方 SQLite Checkpointer 中保留，并可由模型后续步骤读取。由于 Thread 的状态会被下一轮 Run 覆盖，**历史列表不能只读最新 Checkpoint**：每个 Run 的 Todo 快照需同时存在业务 SQLite `run_todos` 表，以供刷新页面、切换会话、应用重启后查询。两份状态不存在跨库事务，SQLite 先提交快照，再返回 Command；Graph 后续 Checkpoint 失败按已有 Run FAILED + Thread 需恢复处理。下一个 Run 开始时 Graph 输入显式 `todos=[]` 重置本轮计划，不污染其它 Run，历史快照仍在数据库。
+
+**并发更新规则**：`write_todos` 每次提交**完整** Todo 列表，`todo_id` 固定，最多 8 条、标题长度 1–120，状态 `pending/in_progress/completed`。旧 todo_id 不能随意删除/换 ID，状态不能从 completed 回退；允许添加新 ID；新建/更新先在 SQLite 原子校验再替换快照，同 ID 更新覆盖而不无限追加。要求一次模型 AIMessage **最多一个 write_todos ToolCall**；如同批重复写计划，全部该批 `write_todos` 应返回稳定 `ERROR[TODO_CONFLICT]`，不允许两个并行 Command 修改同一个父 State Channel；必要时用检测工具调用批次、Run 层互斥 + 明确冲突拒绝，而非误用 append reducer。具体以已锁版本 `AgentState/ToolRuntime/Command` 实测，若无法安全把 Todo 写入 Checkpoint，停止，不退化为只有前端的假 Todo。
+
+#### 3. Run/Task 边界与持久化合同
+
+**存储**沿用 `backend/data/runtime.sqlite3`，`RuntimeDatabase.init_schema()` 只追加两个表/索引（兼容已有 P03 DB）：
+- `run_todos(run_id TEXT REFERENCES runs(id),todo_id TEXT,title TEXT,status TEXT,position INTEGER,updated_at TEXT,PRIMARY KEY(run_id,todo_id))`，含 run 内唯一 position 和 status CHECK。完整快照提交为单个 SQLite 事务；按 position 排序；Run 新一轮状态从空开始，记录只归当次 Run。
+- `subtasks(id TEXT PRIMARY KEY,run_id TEXT REFERENCES runs(id),thread_id TEXT REFERENCES threads(id),agent_type TEXT,description TEXT,todo_id TEXT NULL,status TEXT,result_summary TEXT NULL,error_code TEXT NULL,source_file_ids_json TEXT NOT NULL DEFAULT '[]',created_at TEXT,started_at TEXT NULL,finished_at TEXT NULL)`，索引 `(run_id,created_at,id)`；同一事务验证父 Run 属于 Thread 且处于 RUNNING；可选 `todo_id` 必须属于此 Run 的计划。子任务自身 ID 由服务端 UUID 创建，不复用 Graph ToolCall ID；`tool_call_id` 只做消息回执匹配。描述限制 1–1000 字、摘要上限 1600 字、source IDs 仅来源于真实允许的工具回执而非模型报告中随意写的 UUID。
+- Task 状态：`PENDING → RUNNING → COMPLETED/FAILED/TIMED_OUT/CANCELLED`，或未启动时 `PENDING → FAILED`；终态不可逆，统一对外大写；服务启动时遗留 `PENDING/RUNNING` 标记 `FAILED/SUBTASK_INTERRUPTED`，不主动重试、不断言已经完成。后端退出主动取消时 `CANCELLED`；执行超时 `TIMED_OUT`。不存在 Task 独立于父 Run 永久后台执行的模式。
+
+**Task Registry**：`runtime/task_registry.py` 只保存活动 Run 的限额信号量/Task 强引用/防重复计数；**权威历史 Task 结果写 SQLite**。每个父 Run 最大**4 次**委派（包含失败/超时，不允许无限重试），同时最多 **3 个**子代理执行；父 `RunService` 同时最多 2 个 Run，所以系统最多 6 个并发子代理（全局上限以运行中 parent Run 数自然推导，工具线程没有另建无限后台任务）。第 5 次 `task` 返回 `ERROR[SUBTASK_LIMIT]` 而不启动模型；并发执行使用 per-run `asyncio.Semaphore(3)`，保证取消时释放；每个被批准调用分配 Task ID、持久登记并发送 `subtask_created`，进入真正 child `ainvoke` 前更新 RUNNING 并发 `subtask_started`。
+
+**生命周期与超时**：每个 child 最多 6 次模型/工具循环的等价图步预算（按本地锁版实测 `recursion_limit` 的“图节点步数”，不可误把 graph recursion_limit=6 当 6 次模型调用）；默认 `subagent_recursion_limit=14`、`subagent_timeout_seconds=35`、`max_subagent_concurrency=3`、`max_subagent_calls_per_run=4`。父持久 Run 全程默认 `run_timeout_seconds=150`（P02 之前 45 秒不足以连续执行多个子代理；P01 独立 Agent 仍保留原 45 秒设置），前端 P02 轮询 180 秒上限可覆盖父 Run；若要进一步提高配额必须先更新合同和 UI 超时。任何取消应先取消/回收 child 后再终结父 Run，避免子代理晚到并继续使用已关闭的 Workspace/DB。子代理模型错误/超时被映射为脱敏安全错误，并生成真实 ToolMessage `ERROR[SUBTASK_...]`，父 Agent 可据此解释部分失败；**不因为子任务失败就伪造“全部完成”**。Run 整体成功与否仍由 P02 真实 Graph 最终答复校验决定，Task 状态不能由父模型措辞倒推出 COMPLETED。
+
+**Child 隔离**：在 `agents/subagents/executor.py` 对每次 `task` 调用创建独立 `create_agent(model,allowed_tools,checkpointer=None,context_schema=ChildContext,system_prompt=角色Prompt)`，以只包含该子任务目标及必要的当前 Thread 文件 ID/受控摘要的 HumanMessage 启动；不传父消息列表、父 Thread Checkpointer、父全部上下文、父图 `configurable.thread_id`，不额外创建 SQLite child Checkpointer 或 child Thread。子模型不再调用 task，从而 **MAX_DELEGATION_DEPTH=1**。必要时传“用户已上传文件列表的已登记元信息”，仍先校验作用域，不主动把所有文件正文加载到 Prompt。子 Agent 的 `read_text` 直接沿用 P03 的归属验证。
+
+**子任务结果**：`TaskResult(task_id,status,summary,error_code,source_file_ids)`；正常结束必须验证子图最后一条有效 AIMessage 与工具回执，摘要最多 1600 字，对模型过长/不可信结果保守裁剪并显式 `truncated` 标志；引用的 `file_id` 只能取 child 真实成功 `read_text` 调用的 ID 并做 Thread 校验，不能相信模型最后自然语言里声称的路径/URL。Task 工具仅返回此简要 JSON（或 `ERROR[CODE]`）给父 Agent，不向父 Graph 写子模型的完整消息、Token 或隐藏推理。
+
+#### 4. SSE / HTTP / Web 合同
+
+**增加事件类型**，沿用 P02 `EventBus.publish(run_id,kind,payload)`、相同 `run_id:sequence`/512 缓冲/订阅 gap/10 分钟结束保留/终态先 DB 后 SSE：
+- `todo_updated`：`{run_id,todos:[{todo_id,title,status,position}],revision}`；仅 SQLite 快照成功提交才发，发送失败不能谎称持久化失败；前端历史以 GET 结果为准。
+- `subtask_created`：`{task_id,agent_type,description,todo_id?,status:"PENDING"}`。
+- `subtask_started`：`{task_id,agent_type,status:"RUNNING"}`。
+- `subtask_completed`：`{task_id,status:"COMPLETED",summary,source_file_ids}`。
+- `subtask_failed`：`{task_id,status:"FAILED"|"TIMED_OUT"|"CANCELLED",error_code}`。
+- 事件没有要暴露的子模型完整提示词、Prompt、隐藏推理或文件正文；说明所有任务相关事件为**该父 Run** 的事件，不产生虚假的独立 P02 Run。
+
+**新增只读 HTTP**，避免刷新后消失的内存 Task：
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/api/runs/{run_id}/todos` | 200 `TodoItem[]`，无计划为 `[]`；未知 Run 404 |
+| GET | `/api/runs/{run_id}/subtasks` | 200 `TaskRecord[]`，稳定创建时间排序；未知 Run 404 |
+
+不提供由前端写 Todo/手工触发 Sub-Agent 的公共 API（P04 只能由可信父 Run 内 Tool Calling 发起）。运行中 SSE 快照来自服务器；断线/重连/刷新时 **GET Todos/Subtasks** 做权威补齐，事件可能已过期也不影响已登记记录查询。原 P01/P02/P03 HTTP、SSE 的 `assistant_delta/tool_start/tool_end/assistant_final/run_end`、工具轨迹与 Artifact 下载协议不变。对于内存事件缓冲满时出现 `stream_gap`，前端停下增量拼接，重新取 Run/Todo/Task 三个端点。
+
+**前端**增加两个只读面板，绑定当前活动/历史 Run，尽量不增加新 UI 框架：
+- `TodoPanel.tsx` 显示结构化顺序、状态、时间；同 ID 更新覆盖，不从助手自然语言识别状态；无计划显示“本次未使用计划”而非错误。
+- `TaskPanel.tsx` 显示真实子任务角色、标题/描述、当前状态、简短结果、明确失败/超时；role 标签的 research 需要注明“仅已上传材料”；不会伪造模型内部步骤或子 Agent 文字流。
+- `ChatPanel/RunStatus` 将 Run 详情与 Todo/Task 面板关联：实时 SSE 先更新本地视图，`run_end`/刷新/切换会话时使用 GET 权威覆盖；已经执行但 SSE 过期的历史 Run 也要看到真实 Todo/Task；保持现有 P03 FilesPanel 完整可用、Run 终态文件列表照旧刷新。
+- `frontend/src/api/runtime.ts` 增加 DTO 和 GET API；`subscribeRunEvents` 显式注册 5 个新自定义事件（浏览器 EventSource 不能只用 onmessage），继续校验 run_id/thread_id/递增事件 ID，按已有缺口回退机制处理。
+
+#### 5. 文件分工（Codex 不重新划分架构）
+
+| 新增/修改路径 | 具体责任 |
+|---|---|
+| `backend/src/minideerflow/agents/state.py` | `TodoItem/P04AgentState`，AgentState 扩展/状态替换规则；工具 State Command 不做 append |
+| `backend/src/minideerflow/agents/lead.py` | 可选 `state_schema`、P04 专属追加 system prompt；P01 单轮与 P02/P03 legacy 工具不变 |
+| `backend/src/minideerflow/runtime/models.py` | `TodoItem/TaskRecord/TaskResult/TaskStatus` 可放独立 `agents/state.py` + `subagents/models.py`，但 DTO 只能定义一处并从全项目复用；RunEvent 结构向后兼容 |
+| `backend/src/minideerflow/runtime/db.py` | 追加 `run_todos/subtasks` 表、索引和约束，无破坏式改造 |
+| `backend/src/minideerflow/runtime/plan_repository.py` | 同一 RuntimeDatabase 原子 Todo 快照与 Task 创建/状态转换/列表，Run/Thread 真正归属验证、启动孤儿核查 |
+| `backend/src/minideerflow/runtime/task_registry.py` | 每父 Run 3 并发/4 总次数、Semaphore/受管理 Task、timeout/cancel/shutdown，不替代 SQL 历史 |
+| `backend/src/minideerflow/agents/context.py` | 冻结 dataclass `AgentRunContext(WorkspaceContext)` / `ChildContext(WorkspaceContext)`、可信依赖注入；确保 P03 tools 仍通过校验 |
+| `backend/src/minideerflow/tools/todo_tool.py` | `write_todos(items,ToolRuntime[AgentRunContext,P04AgentState])->Command`，有效状态快照+真实 ToolMessage、SSE；拒绝多写并行冲突 |
+| `backend/src/minideerflow/agents/subagents/config.py` | `general/research` 固定 Spec（system_prompt/tools/timeout/recursion），文档对 research 不夸大联网 |
+| `backend/src/minideerflow/agents/subagents/executor.py` | 构建独立 child Agent、状态与 ToolMessage 校验、结果脱敏/长度限制/来源 ID、取消回收；不复用父 Saver |
+| `backend/src/minideerflow/agents/subagents/dispatcher.py` | role+父授权交集、TaskRegistry 限额/数据库状态/SSE、同步等待结果，不创建独立 P02 Run |
+| `backend/src/minideerflow/tools/task_tool.py` | `task(agent_type,description,todo_id?,runtime)`；模型 Schema 只包含公开参数，可信 Runtime 注入，不允许子代理再 task |
+| `backend/src/minideerflow/runtime/runner.py` | 装配 P04 AgentRunContext、注入 todo/task tools、增父 Run 超时/终结和 Task 清理时序；沿用 P03 Workspace |
+| `backend/src/minideerflow/runtime/streaming.py` | 支持本轮输入初始化 `todos=[]`，现有消息 ID 去重和 SSE 工具轨迹仍正确；不将 Task 结果当新的助手消息 |
+| `backend/src/minideerflow/main.py` / `config.py` | 初始化并挂载 PlanRepository/TaskRegistry，启动孤儿标记、关闭任务先于 RunService/SQLite（依赖栈顺序要核对），配置上下界；注册只读 API |
+| `backend/src/minideerflow/api/tasks.py` | 两个 GET 端点+统一 404/脱敏错误；不暴露写 API |
+| `frontend/src/api/runtime.ts` | Todo/Task DTO + GET + 新 SSE 事件类型 |
+| `frontend/src/components/TodoPanel.tsx` / `TaskPanel.tsx` | 两类真实实体的实时/历史只读面板 |
+| `frontend/src/components/ChatPanel.tsx` / `RunStatus.tsx` / `App.tsx` / `styles.css` | 在当前 Run 和历史列表展示 Todo/Task、SSE、失败/刷新；P03 上传/下载和 P01 调试区原样保留 |
+| `backend/tests/test_todos.py` / `test_subagents.py` / `test_task_registry.py` / `test_tasks_api.py` | 真 ToolRuntime + 假模型 + 临时 SQLite、状态/权限/并发/取消/重启 |
+| 必要时 `backend/tests/test_runner.py` / `test_runs_api.py` / `test_file_tools.py` / `test_events.py` | P04 接入直接触及的旧能力，严格局部补测 |
+| `README.md` / `docs/progress/P04.md` / `docs/tasks/P04-ABCD.md` | 分 A/B/C/D 记录真实接口、运行命令、前端功能、Git SHA、Fake/真模型及未测项 |
+
+#### 6. 子任务执行 / 检测标准
+
+**P04-A · Todo/GraphState/持久化/初版 UI**
+1. 核对 P03 实际代码和本地锁版本；先用最小 ToolRuntime + `Command` + `create_agent(state_schema=...)` + SQLite Saver 假模型验证可用，再修改正式 Graph。
+2. 实现 State/DTO、`run_todos`/PlanRepository、`write_todos`、RunContext、Run Service 仅接入 Todo、GET todos；前端 TodoPanel 显示当前和历史 Run。**不提前暴露 task 工具**。
+3. 测同 ID 更新不重复、状态不能回退、最多 8、重复调用冲突、真实 Checkpointer `todos`、下个 Run 重置 Todo、无 Todo 普通问答、独立 Thread 隔离、返回 ToolMessage 关联 ID、SSE 和刷新历史。P01/P02/P03 直接消费者的局部测试 + Ruff/前端 build；完成 A 提交 SHA。
+
+**P04-B · 单个真实 Sub-Agent/可信工具边界**
+1. 固定两个角色的允许工具清单；实现 `AgentRunContext`、`ChildContext`、executor+dispatcher+task_tool，先单次/串行调用；子 Agent 的 `create_agent` 无父 Checkpointer、只有新 HumanMessage，真实 Tool Calling 读当前 Thread 文件。
+2. RunService 为持久 Run 注册 task，PlanRepository 记录 Task；GET subtasks，前端 TaskPanel 查看真实结果，P03 FilesPanel/旧 API 均可用。
+3. 测父 child 模型消息隔离、不可用工具不出 schema、research 无联网、跨 Thread/伪造 Context 拒绝、结果长度/来源 ID 校验、P01 独立 Agent 未增加 task、工具 ID 正确；提交 B SHA。
+
+**P04-C · 有界并发/失败/超时/事件**
+1. `TaskRegistry` 加 per Run Semaphore(3) + 4 次预算 + 35s child timeout、Task 强引用/清理；多个 task tool_calls 同一父模型步骤可以并行，**同批 write_todos 依旧拒绝冲突**。增加 5 种 SSE 事件和 HTTP 权威历史补齐，父 Run 的最终事件必须在 child 全部收尾后发布。
+2. 测峰值最大 3、4 次预算、第 5 次拒绝、超时/取消/异常/重试不假成功、父 Run 超时等待所有子代理回收、单 Run 多子任务 ToolMessage ID 正确、SSE 断线不取消、重启 orphan Task 变 FAILED/SUBTASK_INTERRUPTED。前端实时 Todo/Task 不串 Run/Thread，事件缺口使用 GET；提交 C SHA。
+
+**P04-D · 联调、中文注释与 Demo 交付**
+1. Fake 模型端到端实际完成：上传样例 → `write_todos` → `task(general/research)` → child `read_text` → Lead 汇总并 `write_text(summary.md)` → 真实可下载 Artifact；前端显示状态变化、重启历史、会话隔离；简单请求无强制规划。
+2. 真实模型可用时另测普通和复杂任务（不泄露 key / 不上传私人资料）；本阶段不具备网页搜索，research 只分析已有材料；未按预期调用 task 的场景记录实际失败而非伪造通过。
+3. 只执行 P04 新增/修改及直接调用方 pytest、Ruff、TypeScript build、无 Key 的 HTTP/Fake 浏览器 Smoke；真实模型和假模型测试分开记录，前端同步；提交 D SHA、更新 README/进度。结束时整体 `PENDING_REVIEW` 等用户手动 Demo；不提前开始 P05，不自动合并 main。
+
+**固定验收**：同一 Thread 不同 Run 的历史 Todo/Task 正确；状态只能由工具/Registry/SQL 更新，模型文字不能伪造成功；child 只看显式委派目标与允许文件，不继承父全部对话/父 Saver；一般和 research Tool 不越权且无任何嵌套 task；每父 Run 不超过 3 并发/4 次调用，超时取消后不留跑飞任务；工具轨迹和 SSE run_end 按实际业务状态；P01/P02/P03 保留；所有关键逻辑遵循中文注释及长逻辑 1/2/3 分段。
+
+**参考资料**：DeerFlow v2.0.0 的 `backend/packages/harness/deerflow/agents/middlewares/todo_middleware.py`、`tools/builtins/task_tool.py`、`subagents/executor.py`（参考职责，不复制庞大 TaskPool/隔离线程）；官方 [LangChain 自定义 AgentState](https://docs.langchain.com/oss/python/langchain/short-term-memory)、[ToolRuntime 与 Command 更新状态](https://docs.langchain.com/oss/python/langchain/tools)、[Sub-Agent 工具委派和隔离](https://docs.langchain.com/oss/python/langchain/multi-agent/subagents)。**工具签名须以本项目实际锁定版本为准**，不得直接照搬未来版本，必要时写最小假模型兼容测试。
+
+**停止条件**：若 `ToolRuntime + Command`/自定义 `AgentState` 无法在锁定版本安全工作、并发写 State 存在隐性竞态、子代理越权/复用父 Saver、执行取消仍留下活跃 child、关键安全测试失败，Codex 停在最近可验证提交并上报复现证据；不得为了 Demo 放宽范围。阶段与 git 进度必须如实记录，不写假测试数字、不改 P02/P03 待验收状态。
+
 
 ### P05 — 统一 ToolRegistry、MCP 适配器与 Skills
 
