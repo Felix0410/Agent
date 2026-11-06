@@ -6,6 +6,7 @@ from minideerflow.runtime.db import RuntimeDatabase
 from minideerflow.workspace.models import (
     THREAD_BYTES_LIMIT,
     THREAD_FILE_LIMIT,
+    ArtifactRecord,
     FileKind,
     FileRecord,
     WorkspaceError,
@@ -80,3 +81,97 @@ class WorkspaceRepository:
             if row is None:
                 raise WorkspaceError("FILE_NOT_FOUND", "File not found", 404)
             return FileRecord(**dict(row))
+
+    async def _run(self, conn: aiosqlite.Connection, thread_id: str, run_id: str) -> None:
+        validate_uuid(run_id)
+        await self._thread(conn, thread_id)
+        async with conn.execute(
+            "SELECT 1 FROM runs WHERE id=? AND thread_id=? AND status='RUNNING'",
+            (run_id, thread_id),
+        ) as cursor:
+            if await cursor.fetchone() is None:
+                raise WorkspaceError("INVALID_FILE_PATH", "Run is not active in this thread", 422)
+
+    async def check_run(self, thread_id: str, run_id: str) -> None:
+        """文件工具只允许当前真实 Run 使用本 Thread，Prompt/JSON 不提供身份。"""
+        async with self.database.transaction() as conn:
+            await self._run(conn, thread_id, run_id)
+
+    async def get_file_for_thread(self, thread_id: str, file_id: str) -> FileRecord:
+        """归属不符与未知 ID 均返回404，校验完成后调用方才能触碰磁盘。"""
+        async with self.database.transaction() as conn:
+            await self._thread(conn, thread_id)
+            async with conn.execute(
+                "SELECT * FROM files WHERE id=? AND thread_id=?", (file_id, thread_id)
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row is None:
+                raise WorkspaceError("FILE_NOT_FOUND", "File not found", 404)
+            return FileRecord(**dict(row))
+
+    async def register_artifact(self, file: FileRecord) -> ArtifactRecord:
+        """真实文件与Artifact双表原子登记，同时检查Run归属、额度与同名冲突。"""
+        from uuid import uuid4
+
+        if file.kind != FileKind.ARTIFACT or file.run_id is None:
+            raise WorkspaceError("INVALID_FILE_PATH", "Invalid artifact metadata", 422)
+        artifact = ArtifactRecord(
+            artifact_id=str(uuid4()),
+            file_id=file.id,
+            thread_id=file.thread_id,
+            run_id=file.run_id,
+            display_name=file.display_name,
+            size_bytes=file.size_bytes,
+            mime=file.mime,
+            created_at=file.created_at,
+        )
+        async with self.database.transaction() as conn:
+            # 1. 登记前再次验证活动Run，不能只依赖磁盘写入前的快照。
+            await self._run(conn, file.thread_id, file.run_id)
+            await self._quota(conn, file)
+            try:
+                # 2. 两表同事务，名称冲突由部分UNIQUE索引无覆盖兜底。
+                await self._insert_file(conn, file)
+                await conn.execute(
+                    "INSERT INTO artifacts(id,file_id,thread_id,run_id,created_at) VALUES(?,?,?,?,?)",
+                    (artifact.artifact_id, file.id, file.thread_id, file.run_id, file.created_at),
+                )
+            except aiosqlite.IntegrityError as exc:
+                if "files.thread_id, files.display_name" in str(exc):
+                    raise WorkspaceError(
+                        "ARTIFACT_NAME_CONFLICT", "Artifact name already exists", 409
+                    ) from None
+                raise WorkspaceError(
+                    "WORKSPACE_UNAVAILABLE", "Artifact registration failed", 503
+                ) from None
+        return artifact
+
+    _ARTIFACT_QUERY = """SELECT a.id AS artifact_id, a.file_id, a.thread_id, a.run_id, a.created_at,
+        f.display_name, f.size_bytes, f.mime FROM artifacts a
+        JOIN files f ON f.id=a.file_id AND f.thread_id=a.thread_id AND f.run_id=a.run_id
+        JOIN runs r ON r.id=a.run_id AND r.thread_id=a.thread_id
+        WHERE f.kind='ARTIFACT' """
+
+    async def list_artifacts(self, thread_id: str) -> list[ArtifactRecord]:
+        """只列出file/run/thread关联一致的真实产物，不按磁盘扫描推测。"""
+
+        async with self.database.transaction() as conn:
+            await self._thread(conn, thread_id)
+            async with conn.execute(
+                self._ARTIFACT_QUERY + "AND a.thread_id=? ORDER BY a.created_at,a.id",
+                (thread_id,),
+            ) as cursor:
+                return [ArtifactRecord(**dict(row)) for row in await cursor.fetchall()]
+
+    async def get_artifact(self, thread_id: str, artifact_id: str) -> ArtifactRecord:
+        """归属错配与未知产物均不可读取，不泄露其它会话的资源。"""
+
+        async with self.database.transaction() as conn:
+            await self._thread(conn, thread_id)
+            async with conn.execute(
+                self._ARTIFACT_QUERY + "AND a.id=? AND a.thread_id=?", (artifact_id, thread_id)
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row is None:
+                raise WorkspaceError("ARTIFACT_NOT_FOUND", "Artifact not found", 404)
+            return ArtifactRecord(**dict(row))

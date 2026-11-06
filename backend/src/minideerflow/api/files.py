@@ -1,10 +1,18 @@
 """文件 HTTP 边界：只使用 WorkspaceService，不拼接宿主机路径。"""
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile
+from urllib.parse import quote
+
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
+from fastapi.responses import Response
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from minideerflow.workspace.models import FileRecord, WorkspaceError
+from minideerflow.workspace.models import (
+    ArtifactRecord,
+    FileRecord,
+    WorkspaceError,
+    validate_filename,
+)
 
 router = APIRouter()
 
@@ -44,5 +52,36 @@ async def upload_file(thread_id: str, request: Request) -> FileRecord:
 async def list_files(thread_id: str, request: Request) -> list[FileRecord]:
     try:
         return await request.app.state.workspace.list_files(thread_id)
+    except WorkspaceError as exc:
+        raise workspace_http_error(exc) from None
+
+
+@router.get("/api/threads/{thread_id}/artifacts", response_model=list[ArtifactRecord])
+async def list_artifacts(thread_id: str, request: Request) -> list[ArtifactRecord]:
+    try:
+        return await request.app.state.workspace.list_artifacts(thread_id)
+    except WorkspaceError as exc:
+        raise workspace_http_error(exc) from None
+
+
+@router.get("/api/artifacts/{artifact_id}")
+async def download_artifact(
+    artifact_id: str, request: Request, thread_id: str = Query(...)
+) -> Response:
+    """只用已验证字节响应；不把磁盘路径交给FileResponse再次打开。"""
+    try:
+        data, metadata = await request.app.state.workspace.download_artifact(thread_id, artifact_id)
+        name, mime = validate_filename(metadata.display_name)
+        if mime != metadata.mime:
+            raise WorkspaceError("INVALID_FILE_CONTENT", "Artifact metadata is invalid", 422)
+        suffix = name.rsplit(".", 1)[-1].lower()
+        return Response(
+            data,
+            media_type=mime,
+            headers={
+                "Content-Disposition": f"attachment; filename=\"artifact.{suffix}\"; filename*=UTF-8''{quote(name, safe='')}",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
     except WorkspaceError as exc:
         raise workspace_http_error(exc) from None

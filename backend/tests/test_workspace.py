@@ -294,3 +294,94 @@ def test_unknown_thread_never_creates_directory(tmp_path):
             assert list(storage.root.iterdir()) == []
 
     asyncio.run(scenario())
+
+
+async def start_file_run(runtime, thread):
+    from minideerflow.runtime.models import RunStatus
+
+    run = await runtime.create_run(thread.id, "workspace writes")
+    await runtime.transition_run(run.id, RunStatus.CREATED, RunStatus.RUNNING)
+    return run
+
+
+def test_artifact_name_race_no_overwrite_and_sha(tmp_path):
+    async def scenario():
+        async with workspace(tmp_path) as (service, runtime, storage):
+            thread = await runtime.create_thread()
+            run = await start_file_run(runtime, thread)
+            results = await asyncio.gather(
+                service.write_text(thread.id, run.id, "summary.md", "one"),
+                service.write_text(thread.id, run.id, "summary.md", "two"),
+                return_exceptions=True,
+            )
+            errors = [x for x in results if isinstance(x, WorkspaceError)]
+            assert len(errors) == 1 and errors[0].code == "ARTIFACT_NAME_CONFLICT"
+            artifacts = await service.list_artifacts(thread.id)
+            assert len(artifacts) == 1 and len(await service.list_files(thread.id)) == 1
+            data, metadata = await service.download_artifact(thread.id, artifacts[0].artifact_id)
+            assert data in [b"one", b"two"]
+            record = await service.repository.get_file(metadata.file_id)
+            assert record.sha256 == hashlib.sha256(data).hexdigest()
+            assert len(list((storage.root / thread.id).iterdir())) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "code"),
+    [
+        ("output.pdf", "text", "UNSUPPORTED_FILE_TYPE"),
+        ("x.md", "x" * 131073, "FILE_TOO_LARGE"),
+        ("/tmp/escape.md", "x", "INVALID_FILENAME"),
+        ("x.md", "\ud800", "INVALID_FILE_CONTENT"),
+    ],
+)
+def test_tool_write_limits_and_types(tmp_path, name, content, code):
+    async def scenario():
+        async with workspace(tmp_path) as (service, runtime, _storage):
+            thread = await runtime.create_thread()
+            run = await start_file_run(runtime, thread)
+            with pytest.raises(WorkspaceError) as error:
+                await service.write_text(thread.id, run.id, name, content)
+            assert error.value.code == code
+            assert await service.list_artifacts(thread.id) == []
+            assert await service.list_files(thread.id) == []
+
+    asyncio.run(scenario())
+
+
+def test_text_read_complete_limit_and_cross_thread(tmp_path):
+    async def scenario():
+        async with workspace(tmp_path) as (service, runtime, _storage):
+            thread = await runtime.create_thread()
+            other = await runtime.create_thread()
+            allowed = await service.upload(thread.id, Upload(b"x" * 65536))
+            assert len(await service.read_text(thread.id, allowed.id)) == 65536
+            large = await service.upload(thread.id, Upload(b"x" * 65537))
+            with pytest.raises(WorkspaceError) as error:
+                await service.read_text(thread.id, large.id)
+            assert error.value.code == "TOOL_READ_LIMIT"
+            for identifier in [allowed.id, str(uuid4()), "/etc/passwd"]:
+                with pytest.raises(WorkspaceError) as error:
+                    await service.read_text(other.id, identifier)
+                assert error.value.code == "FILE_NOT_FOUND"
+
+    asyncio.run(scenario())
+
+
+def test_forged_run_and_artifact_thread_mismatch(tmp_path):
+    async def scenario():
+        async with workspace(tmp_path) as (service, runtime, storage):
+            thread = await runtime.create_thread()
+            other = await runtime.create_thread()
+            run = await start_file_run(runtime, other)
+            with pytest.raises(WorkspaceError):
+                await service.write_text(thread.id, run.id, "bad.md", "x")
+            assert list(storage.root.iterdir()) == []
+            artifact = await service.write_text(other.id, run.id, "good.md", "safe")
+            with pytest.raises(WorkspaceError) as error:
+                await service.download_artifact(thread.id, artifact.artifact_id)
+            assert error.value.code == "ARTIFACT_NOT_FOUND"
+            assert (await service.download_artifact(other.id, artifact.artifact_id))[0] == b"safe"
+
+    asyncio.run(scenario())

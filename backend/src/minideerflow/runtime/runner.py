@@ -16,6 +16,9 @@ from minideerflow.runtime.models import RunAccepted, RunDto, RunStatus
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.streaming import stream_agent
 from minideerflow.tools.calculator import calculate
+from minideerflow.tools.file_tools import list_files, read_text, write_text
+from minideerflow.workspace.models import WorkspaceContext
+from minideerflow.workspace.service import WorkspaceService
 
 logger = logging.getLogger("minideerflow")
 
@@ -39,8 +42,10 @@ class RunService:
         *,
         events: EventBus | None = None,
         model_factory: Callable[[Settings], BaseChatModel] | None = None,
+        workspace: WorkspaceService | None = None,
     ) -> None:
         self.events = events
+        self.workspace = workspace
         self.repository = repository
         self.checkpointer = checkpointer
         self.settings = settings
@@ -120,7 +125,19 @@ class RunService:
             await self.repository.transition_run(run.id, RunStatus.CREATED, RunStatus.RUNNING)
             await self._emit(run.id, "run_start", {"status": "RUNNING"})
             model = self.model_factory(self.settings)
-            agent = build_lead_agent(model, [calculate], self.checkpointer)
+            context = None
+            if self.workspace is not None:
+                # 身份来自已持久化的Run，不从Prompt/模型JSON/全局变量取得。
+                context = WorkspaceContext(run.thread_id, run.id, self.workspace)
+                agent = build_lead_agent(
+                    model,
+                    [calculate, list_files, read_text, write_text],
+                    self.checkpointer,
+                    context_schema=WorkspaceContext,
+                )
+            else:
+                # 旧单轮路径及无Workspace的局部Fake注入保持原工具范围。
+                agent = build_lead_agent(model, [calculate], self.checkpointer)
             # 2. 整轮而非单次模型 HTTP 请求有时限；历史由 Checkpointer 自动传入。
             async with asyncio.timeout(self.settings.model_timeout_seconds):
                 response = await stream_agent(
@@ -129,6 +146,7 @@ class RunService:
                     run.input_message,
                     event_sink=lambda kind, payload: self._emit(run.id, kind, payload),
                     on_graph_start=mark_graph_started,
+                    context=context,
                 )
             # 3. 只有有效的本轮最终消息才能写入 SUCCEEDED。
             await self._emit(run.id, "assistant_final", {"answer": response.answer})

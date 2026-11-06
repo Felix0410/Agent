@@ -22,6 +22,7 @@ async def stream_agent(
     event_sink: EventSink | None = None,
     *,
     on_graph_start: Callable[[], None] | None = None,
+    context: Any | None = None,
 ) -> AgentResponse:
     """以框架流执行一次 Run，只验收当前新增消息，排除 Checkpoint 的旧历史。"""
     config = thread_config(thread_id)
@@ -45,6 +46,7 @@ async def stream_agent(
         {"messages": [{"role": "user", "content": message}]},
         config=config,
         stream_mode=["messages", "updates"],
+        context=context,
     ):
         if mode == "messages":
             chunk, metadata = data

@@ -19,6 +19,7 @@ type AgentResponse = {
 export default function App() {
   const [selectedThread, setSelectedThread] = useState<ThreadDto | null>(null);
   const [threadEpoch, setThreadEpoch] = useState(0);
+  const [fileEpoch, setFileEpoch] = useState(0);
   const selectionVersion = useRef(0);
 
   function selectThread(thread: ThreadDto) {
@@ -137,10 +138,17 @@ export default function App() {
           key={selectedThread?.id ?? "none"}
           thread={selectedThread}
           onThreadUpdate={updateThread}
+          onRunFinished={() => setFileEpoch((old) => old + 1)}
         />
       </div>
 
-      {selectedThread && <FilesPanel key={selectedThread.id} threadId={selectedThread.id} />}
+      {selectedThread && (
+        <FilesPanel
+          key={selectedThread.id}
+          threadId={selectedThread.id}
+          refreshKey={fileEpoch}
+        />
+      )}
 
       {/* 健康检查和计算器独立运行，不依赖模型配置。 */}
       <section>
@@ -206,7 +214,7 @@ export default function App() {
 
       <footer>
         当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02 会话记忆 / 后台 Run /
-        SSE。P03-A 上传/文件列表。后续：Artifact、Todo。
+        SSE。P03 上传 / 文件工具 / Artifact。后续：Todo。
       </footer>
     </main>
   );

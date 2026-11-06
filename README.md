@@ -193,3 +193,9 @@ PyCharm GUI断点和用户最终Demo验收待人工完成。开发使用的临�
 当前Thread可上传 UTF-8 txt/md/csv/json（2MiB）或PDF（10MiB，仅存储不解析）；总50项/30MiB。`WORKSPACE_ROOT_PATH`默认backend/data/workspaces，相对路径从backend解析。实际存储只用内部UUID，显示名不参与磁盘路径。上传和文件列表不需要模型配置；本地 `.env` 保持原样。
 
 新增POST/GET `/api/threads/{thread_id}/files`；浏览器FormData字段file单文件，201返回已登记FileRecord，无宿主机路径。只支持安全POSIX本地存储，目录symlink/替换、非法内容和配额等错误会拒绝。P03-A尚无文件工具或Artifact下载；原P01/P02功能保留。
+
+## P03-B 文件工具与产物（本次增量）
+
+持久Thread Run已接入list_files/read_text/write_text：身份来自服务端ToolRuntime，模型不传Thread/Run/真实路径。读取完整UTF-8最多64KiB，写入新文本产物最多128KiB，同名产物不覆盖。PDF只能上传存储，不能read_text。P01独立Agent/CLI仍只有calculate。
+
+实际Run结束后页面刷新已登记文件和产物，提供带Thread归属的下载；Run失败前已登记的真实产物仍可下载。新GET `/api/threads/{thread_id}/artifacts` 和 `/api/artifacts/{artifact_id}?thread_id=...`；没有登录鉴权，仅限本机单用户，不是公网多租户系统。

@@ -47,7 +47,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         events.start()
         stack.push_async_callback(events.shutdown)
         app.state.events = events
-        runner = RunService(repository, saver, settings, events=events)
+        runner = RunService(
+            repository, saver, settings, events=events, workspace=app.state.workspace
+        )
         runner.start()
         stack.push_async_callback(runner.shutdown)
         app.state.runner = runner

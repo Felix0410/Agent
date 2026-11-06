@@ -286,3 +286,24 @@ class WorkspaceStorage:
                 os.close(file_fd)
             if directory >= 0:
                 os.close(directory)
+
+    async def save_text(
+        self, thread_id: str, run_id: str, name: str, content: str, mime: str
+    ) -> StoredFile:
+        """小文本使用同一安全发布机制，大小按UTF-8字节而非字符计数。"""
+        from minideerflow.workspace.models import WRITE_LIMIT
+
+        try:
+            data = content.encode("utf-8", errors="strict")
+        except UnicodeError:
+            raise WorkspaceError("INVALID_FILE_CONTENT", "Text must use valid UTF-8", 422) from None
+        if len(data) > WRITE_LIMIT:
+            raise WorkspaceError("FILE_TOO_LARGE", "Tool write exceeds 128KiB", 413)
+
+        async def chunks():
+            for start in range(0, len(data), CHUNK_SIZE):
+                yield data[start : start + CHUNK_SIZE]
+
+        return await self._save(
+            thread_id, name, mime, chunks(), WRITE_LIMIT, kind=FileKind.ARTIFACT, run_id=run_id
+        )

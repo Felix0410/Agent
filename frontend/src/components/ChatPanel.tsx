@@ -15,9 +15,11 @@ import type { LiveRun } from "./RunStatus";
 export default function ChatPanel({
   thread,
   onThreadUpdate,
+  onRunFinished,
 }: {
   thread: ThreadDto | null;
   onThreadUpdate: (thread: ThreadDto) => void;
+  onRunFinished: () => void;
 }) {
   const [runs, setRuns] = useState<RunDto[]>([]);
   const [message, setMessage] = useState("");
@@ -73,6 +75,7 @@ export default function ChatPanel({
         setRuns((old) => [...old.filter((item) => item.id !== run.id), run]);
         if (isTerminal(run)) {
           stopStream();
+          onRunFinished();
           // started_at 不等于 Graph 已写入；恢复标志必须读取权威 Thread 数据。
           try {
             const fresh = (await listThreads()).find(

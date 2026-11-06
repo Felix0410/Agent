@@ -62,3 +62,89 @@ def test_one_file_only_and_unknown_thread():
         )
         assert response.status_code == 422
         assert client.get(f"/api/threads/{thread}/files").json() == []
+
+
+def file_model(file_id, name="summary.md"):
+    from langchain_core.messages import AIMessage
+    from test_lead import ScriptedModel
+
+    return ScriptedModel(
+        responses=[
+            AIMessage(
+                content="", tool_calls=[{"id": "list-call", "name": "list_files", "args": {}}]
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{"id": "read-call", "name": "read_text", "args": {"file_id": file_id}}],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "write-call",
+                        "name": "write_text",
+                        "args": {"filename": name, "content": "临时摘要：safe sample"},
+                    }
+                ],
+            ),
+            AIMessage(content="File artifact registered"),
+        ]
+    )
+
+
+def test_run_file_tools_artifact_http_and_download(monkeypatch):
+    from test_runs_api import drain, parse_events
+
+    from minideerflow.runtime import runner
+
+    holder = []
+    name = '摘要 "v1".md'
+    monkeypatch.setattr(runner, "build_chat_model", lambda settings: file_model(holder[0], name))
+    app = create_app()
+    with TestClient(app) as client:
+        thread = client.post("/api/threads", json={}).json()["id"]
+        file = client.post(
+            f"/api/threads/{thread}/files", files={"file": ("notes.md", "临时正文".encode())}
+        ).json()
+        holder.append(file["id"])
+        response = client.post(
+            f"/api/threads/{thread}/runs", json={"message": "read notes and write summary"}
+        )
+        assert response.status_code == 202
+        drain(client, app)
+        run = client.get("/api/runs/" + response.json()["run_id"]).json()
+        assert run["status"] == "SUCCEEDED"
+        assert [trace["name"] for trace in run["tool_calls"]] == [
+            "list_files",
+            "read_text",
+            "write_text",
+        ]
+        assert run["tool_calls"][1]["result"] == "临时正文"
+        artifacts = client.get(f"/api/threads/{thread}/artifacts").json()
+        assert len(artifacts) == 1 and artifacts[0]["display_name"] == name
+        artifact = artifacts[0]
+        download = client.get(
+            "/api/artifacts/" + artifact["artifact_id"], params={"thread_id": thread}
+        )
+        assert download.status_code == 200 and download.content == "临时摘要：safe sample".encode()
+        assert download.headers["content-type"].startswith("text/markdown")
+        assert "attachment;" in download.headers["content-disposition"]
+        assert "filename*=UTF-8''" in download.headers["content-disposition"]
+        assert "%22v1%22" in download.headers["content-disposition"]
+        files = client.get(f"/api/threads/{thread}/files").json()
+        output = next(f for f in files if f["id"] == artifact["file_id"])
+        assert hashlib.sha256(download.content).hexdigest() == output["sha256"]
+        other = client.post("/api/threads", json={}).json()["id"]
+        assert (
+            client.get(
+                "/api/artifacts/" + artifact["artifact_id"], params={"thread_id": other}
+            ).status_code
+            == 404
+        )
+        assert client.get("/api/artifacts/" + artifact["artifact_id"]).status_code == 422
+        assert client.get("/api/artifacts/missing", params={"thread_id": thread}).status_code == 404
+        events = parse_events(client.get("/api/runs/" + run["id"] + "/events").text)
+        starts = [e["payload"]["tool_call_id"] for e in events if e["type"] == "tool_start"]
+        ends = [e["payload"]["tool_call_id"] for e in events if e["type"] == "tool_end"]
+        assert starts == ends == ["list-call", "read-call", "write-call"]
+        assert "storage_key" not in str(artifacts)
