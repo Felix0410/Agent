@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P02-A SQLite / Checkpointer / Thread API 与会话列表已实现并局部验证，等待审核；P02-B/C/D 尚未实施。P01 仍待最终人工审核。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P02-A SQLite / Checkpointer / Thread API 与会话列表已实现并局部验证；P02-B/C/D 已完成联合设计、授权连续编码，尚未实现。P01/P02 最终 Demo 仍待用户人工验收。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -34,10 +34,11 @@
 | [总体业务与系统架构](docs/ARCHITECTURE.md) | 功能范围、真实业务流程、模块边界、状态、接口、技术栈、DeerFlow 源码参考 |
 | [完整开发方案](docs/DEVELOPMENT.md) | P00–P09 增量开发任务、局部测试规则、每阶段验收、Codex 协作 |
 | [P02-A Codex 执行清单](docs/tasks/P02-A.md) | 可按文件实施的 SQLite / Checkpointer / Thread API 与前端同步任务 |
+| [P02-B/C/D 联合执行任务书](docs/tasks/P02-BD.md) | 一次性交给 Codex，按 B→C→D 连续实现、分别测试提交并同步前端 |
 | [代码可读性与 Codex 规则](AGENTS.md) | 中文注释、复杂逻辑编号分段、只测本次变更、同步前端 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
-**执行原则**：逐阶段落地并记录真实测试与 Git SHA；每次开发任务同步 Web 验证台。P02 本轮仅交付 A，按执行清单停在待审核，不自动进入 B/C/D。
+**执行原则**：逐阶段落地并记录真实测试与 Git SHA；每次开发任务同步 Web 验证台。P02-A 已交付；用户现已授权 B/C/D 一次性交给 Codex 顺序实现，B/C/D 各自局部测试与独立提交，关键失败则停止，最终仍待用户验收。
 
 ## P00 本地开发
 
@@ -154,3 +155,8 @@ uv run ruff format --check src tests
 本次新增持久化/API/Checkpoint 测试 **22 passed**，配置与 P01 直接受影响复验 **67 passed**；Ruff 与前端 `npm ci` / `npm run build` 通过。测试隔离本地 `.env` 和实际数据库，不调用真实模型。Fake 模型已证明 Checkpoint 关闭重开仍保留消息、同 Thread 连续对话、跨 Thread 隔离，以及真实工具消息 ID 的持久化；不能当作已交付后台多轮会话聊天。
 
 资源由 lifespan 管理，退出反向关闭连接；业务库的遗留活动 Run 保守标记为 `FAILED/RUN_INTERRUPTED`，所属 Thread 标记需恢复，不宣称无损续跑。两库没有跨库原子事务。完整合同见 [P02 设计](docs/DEVELOPMENT.md)，实际进度见 [P02 记录](docs/progress/P02.md)；仅 A 待审核，不进入 B/C/D。
+
+
+## P02-B/C/D 联合开发（等待编码）
+
+已完成联合设计：[P02-B/C/D 连续执行任务书](docs/tasks/P02-BD.md) 详细规定后台 Run、Graph SSE、页面流式聊天、历史和崩溃后保守恢复的逐文件编码、接口、状态一致性、假模型/真模型验证与验收。用户已授权 B→C→D 在同一次 Codex 会话中连续执行；**此处仅表示设计与授权，当前尚无 B/C/D 业务代码、测试或 Demo 结果**。
