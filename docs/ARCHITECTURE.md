@@ -1,7 +1,7 @@
 # 总体业务与系统架构（正式方案）
 
-**版本**：v1.3 · 2026-11-06  
-**状态**：V1 总体架构确定；P01 Agent 与 P02 Thread/Run/SSE 已在开发分支实现（P02 仍待用户手动验收）；P03 Workspace/File Tools/Artifact 详细设计已完成，业务代码尚未开始。实际进度与接口以 [DEVELOPMENT.md](DEVELOPMENT.md) 及 `docs/progress/` 为准，不能将设计视为已实现。  
+**版本**：v1.4 · 2026-11-06  
+**状态**：V1 总体架构确定；P01–P03 实际代码已在各自开发分支实现，P02/P03 仍待用户手动验收；P04 Todo/Sub-Agent 已完成详细设计，**P04 业务代码尚未开发**。实际进度与接口以 [DEVELOPMENT.md](DEVELOPMENT.md) 和 `docs/progress/` 为准。  
 **参考基线**：[DeerFlow 2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，commit `7e7f0410797693cf882594555ba414e0361d4c6f`。本项目自行实现，不 Fork 原项目。
 
 ## 1. 目标与边界
@@ -124,6 +124,14 @@ P03 在现有 `backend/src/minideerflow/` 包下新增 `workspace/{models,storag
 **可信授权**：Thread Run 在后端构造 `WorkspaceContext(thread_id,run_id,workspace_service)`，由 `create_agent(context_schema=...)` / `ToolRuntime` 注入文件工具，不将这几个身份字段开放给模型参数。工具读取仅使用登记过的 file_id；写入仅接受安全显示名和文本；禁止宿主机 Shell/Python/任意路径与对已有文件覆盖。注意这是单用户本地范围内的文件安全边界，**不是认证的多租户隔离或容器沙箱**。
 
 文件系统以 UUID 内部名、目录文件描述符和不跟随符号链接实现安全访问；数据库记录文件与产物归属和大小/sha256。附件最初只支持 UTF-8 文本及 PDF 原样保存；PDF 解析留待 P08，RAG 与复杂文件操作不属于 P03。
+
+### 3.4 P04 Lead / Todo / Sub-Agent 的职责边界（设计态）
+
+P04 保持单个 `create_agent` 主 Agent 和 P02 `RunService`，增加 `write_todos` 与 `task` 两个模型工具，按复杂任务需要使用，不强制简单聊天规划。Todo 由 LangGraph 自定义 `AgentState.todos` + `Command` 更新，同时保存当前 Run 的 SQL 快照供刷新/重启展示；不靠自然语言推断“任务完成”。
+
+`task` 由服务端可信 `AgentRunContext` 决定 Run/Thread 权限，Dispatcher 仅允许 `general/research` 两种固定子代理。每 child 独立模型消息列表、无父 Checkpointer/子任务再次委派，工具权限仅为角色白名单与父权限的交集；子代理默认只读文件，由 Lead 决定是否生成最终 Artifact。最多 3 个并发子代理、每父 Run 4 次委派，child35秒/父Run150秒限额。子任务 SQL 生命周期与 EventBus SSE 绑定父 Run，不能把子模型文本假装服务端状态。
+
+P04 不提供联网搜索、MCP、取消 API、子任务跨重启自动恢复或分布式队列。两个只读 GET 接口用于历史 Todo/Task 恢复；React `TodoPanel`、`TaskPanel` 同步真实执行过程。具体接口/逐文件任务见 [DEVELOPMENT.md P04](DEVELOPMENT.md) 和 [Codex P04-A/B/C/D](tasks/P04-ABCD.md)。
 
 ## 4. 模块职责与接口
 
