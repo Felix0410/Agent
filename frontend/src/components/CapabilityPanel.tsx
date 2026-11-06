@@ -52,7 +52,7 @@ export default function CapabilityPanel() {
       {!tools.some((t) => t.source === "mcp") && (
         <p>MCP 未启用，无外部工具。</p>
       )}
-      <h3>本地 Skills（说明文本，不授予权限）</h3>
+      <h3>本地 Skills（按需读取，不授予权限）</h3>
       {skills.length === 0 && <p>没有可用 Skill。</p>}
       <ul>
         {skills.map((s) => (

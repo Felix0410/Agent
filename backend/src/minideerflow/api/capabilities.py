@@ -13,5 +13,5 @@ async def tools(request: Request):
 
 @router.get("/skills")
 async def skills(request: Request):
-    """C之前无Skill，不虚构可用技能。"""
-    return []
+    """真实元信息与脱敏警告，既不展示正文也不能安装。"""
+    return request.app.state.skill_service.catalog()

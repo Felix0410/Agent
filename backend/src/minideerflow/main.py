@@ -21,8 +21,10 @@ from minideerflow.runtime.plan_service import PlanService
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.runner import RunService
 from minideerflow.runtime.task_registry import TaskRegistry
+from minideerflow.skills.loader import SkillCatalog
 from minideerflow.tools.mcp_adapter import register_mcp_tools
 from minideerflow.tools.registry import ToolRegistry, register_builtin_tools
+from minideerflow.tools.skill_tools import register_skill_tools
 from minideerflow.workspace.repository import WorkspaceRepository
 from minideerflow.workspace.service import WorkspaceService
 from minideerflow.workspace.storage import WorkspaceStorage
@@ -64,6 +66,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         tool_registry = ToolRegistry()
         register_builtin_tools(tool_registry)
         await register_mcp_tools(tool_registry, settings.mcp_config_path)
+        register_skill_tools(tool_registry)
+        app.state.skill_service = SkillCatalog(tool_registry)
         tool_registry.freeze()
         app.state.tool_registry = tool_registry
         runner = RunService(
@@ -75,6 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             plans=PlanService(app.state.plans),
             task_registry=registry,
             tool_registry=tool_registry,
+            skill_service=app.state.skill_service,
         )
         runner.start()
         stack.push_async_callback(runner.shutdown)

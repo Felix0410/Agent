@@ -15,6 +15,7 @@ dependencies = [
     "python-multipart>=0.0.33",
     "mcp>=1.30.0",
     "langchain-mcp-adapters>=0.3.2",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
