@@ -605,25 +605,117 @@ WHERE status IN ('CREATED', 'RUNNING');
 **Git/停止条件**：本方案及 P02-A 代码已经位于 `feat/p02-runtime-web` 分支。B/C/D 以 [合并任务书](tasks/P02-BD.md) 一次交给 Codex，顺序实施，分别测试和提交 SHA，遇阻塞立即停下，不 reset/clean/force push，也不覆盖本地文件。最终 P02 Demo 完成后只标记 `PENDING_REVIEW`，用户审核通过才能 `ACCEPTED`；不得自动进入 P03。
 
 
-### P03 — Workspace、文件安全与 Artifact
+### P03 — Workspace / 文件工具 / Artifact（2026-11-06 逐文件正式设计）
 
-**业务链**：上传 → 获取 `file_id` → Agent 使用白名单文件工具读取/写出新文件 → 保存 `artifact_id` → 浏览器下载。文件数据进入 Thread 隔离目录，不进入 Git，不传宿主机绝对路径给 LLM。
+> **P03：PLAN_READY（设计写入 GitHub，尚未编码）。** 用户于 2026-11-06 明确请求“启动 P3”；这允许启动 P03 的设计与 Codex 交付，但**不表示 P02 的手动验收已实测通过**。P02 进度继续保持 `PENDING_REVIEW`，P03 从包含全部 P02 代码的远端 `feat/p03-workspace-artifacts` 分支实施。编码者必须先读取 [P03-A/B/C 连续实施合同](tasks/P03-ABC.md)，按 A→B→C 各自局部测试和提交；范围变更/安全测试失败应停止，不能假装完成。
 
-| 新增/修改文件 | 编码必须完成的具体内容 |
-| --- | --- |
-| `workspace/models.py` | FileRecord、ArtifactRecord、文件操作错误类型；文件记录包含 thread_id、run_id?、相对路径、sha256、size、mime、kind。 |
-| `workspace/storage.py` | `save_upload/open_text/write_text/list_files/get_artifact`：使用 `data/workspaces/{thread_id}/` 隔离，先校验归属和安全路径，原子写入、限制文件大小和类型；使用 no-follow/目录句柄或等价安全策略防符号链接/TOCTOU，而非只靠字符串前缀。 |
-| `workspace/repository.py` | SQLite 中新增 files/artifacts 表，记录来源、归属、文件大小与内部存储名，下载只能查登记过的 artifact_id。 |
-| `tools/file_tools.py` | `list_files/read_text/write_text` 三项工具；工具只能访问授予 Thread 的虚拟目录，不开放 Path 对象、绝对地址、Shell 或通用 Python 解释器。 |
-| `api/files.py` | `POST /api/threads/{thread_id}/files` 上传、`GET /api/threads/{thread_id}/artifacts` 列表、`GET /api/artifacts/{artifact_id}` 下载，校验文件归属和下载 MIME。 |
-| `frontend/src/components/FilesPanel.tsx` | 上传、文件列表、下载；请求失败/文件过大有明确提示。 |
-| `tests/test_workspace.py`、`tests/test_files_api.py` | 上传/读/写/下载、文件大小/路径穿越、符号链接、跨 Thread 访问、并发写冲突和失败清理。 |
+#### 1. 用户可见业务链、保留项和非目标
 
-**关键实现固定**：初版只接受 `.txt/.md/.csv/.json` 等可安全解码的文本格式作为 `read_text`，PDF 只保存上传而不宣称可以读取（P08 才解析）。`write_text` 使用临时文件加原子替换，默认禁止覆盖已存在产物，返回 Artifact ID。单用户也要做 Thread 归属判断，因为工具不应跨会话访问。文件工具的权限必须在 Python 执行层检查。
+**一期闭环**：用户在现有会话选择文件 → `multipart/form-data` 上传 → 后端流式限制文件大小、存入 Thread 隔离 Workspace、登记真实文件元数据并返回 `file_id` → 主 Agent 在**服务端可信 Run Context** 下调用 `list_files/read_text/write_text` → 文件工具生成真实文件与 `artifact_id` → 业务库登记 Artifact → 前端列表查看、用登记过的 ID 下载文件，刷新与重启后仍可查询。旧 P01 计算、P02 Thread/Run/SSE/Checkpoint、调试入口均保留。
 
-**实现次序**：P03-A Storage/路径安全 → P03-B Tool + SQLite Metadata/API → P03-C 文件面板及下载。局部测试只测新增文件链路和直接调用方，不重测所有 Agent。
+**文件能力本期只做**：文本上传 `.txt/.md/.csv/.json` 严格 UTF-8、上传 PDF（仅原样存储，**P08 才解析**）、有界 `list_files`/按 `file_id` 的 `read_text`/受控新建 `write_text`、产物列表与下载、局部前端。无需模型也能上传、列表和下载。**不做**任意 Shell/Python、任意宿主机路径、目录递归、覆盖/编辑已有文件、文件删除/分享、扫描 PDF 解析、RAG、文档索引、全文搜索、OCR、复杂 Sandbox、Sub-Agent、MCP、批量上传。
 
-**DeerFlow 参考**：`sandbox/security.py`、`sandbox/local/local_sandbox.py`、`app/gateway/routers/uploads.py`。本地 Sandbox 不等于不可信命令安全沙箱，不复制 Host Bash。
+P02 的 `Run` 状态继续是权威任务终态；成功生成文件也需真实落盘/入库，不根据模型文案猜“文件已创建”。**文件系统与 SQLite 无联合事务**；先安全落盘后登记，登记失败尽力清理新文件并保证不通过 API 访问未登记的残留；崩溃留下的孤立临时文件不会被当成产物，后续专门清理可延期。
+
+#### 2. 现有实际代码接入
+
+P02 已有：`src/minideerflow/main.py`（FastAPI lifespan，`AsyncExitStack`、业务 SQLite/Checkpointer/EventBus/Runner）；`runtime/db.py`（`RuntimeDatabase.init_schema()` 和事务）；`runtime/repository.py`（Thread/Run 一致性）；`runtime/runner.py`（`RunService._execute_run` 中组装 `build_lead_agent(model,[calculate],checkpointer)`）；`runtime/streaming.py`（`stream_agent(agent,thread_id,message,event_sink,on_graph_start)`）；`agents/lead.py` （`create_agent`，可选 Saver）；`frontend/src/App.tsx` + `ChatPanel.tsx`（受控 selected Thread、SSE/Run 终态）；`frontend/src/api/runtime.ts`。
+
+**重要设计调整**：
+- 原 P03 粗略描述“按相对路径读写”，改为**所有模型可调用的文件读取操作只接受不可猜的 `file_id`；新文件写入只接受安全显示名 `filename` 和文本 `content`**。磁盘真实路径仅由后端 UUID 内部键决定；模型不提供 `thread_id`、`run_id`、`workspace_root` 或绝对地址。
+- P03 的可信 `WorkspaceContext` 在创建 Run 的后端 `runner.py` 生成，并用 LangChain `create_agent(...,context_schema=WorkspaceContext)` + Graph `astream(...,context=context)` 注入 `ToolRuntime[WorkspaceContext]`；禁止来自用户 Prompt/工具 JSON 的会话身份，工具侧必须校验真实归属。当前锁版是否支持 `context=`、`ToolRuntime` 隐藏注入，需在 A/B 编码前用实际小样/假模型验证，若不兼容**停止并记录证据，不退化为进程级可变全局 Thread**。
+- 上传有独立 HTTP 入口，没有 Run；模型产物必须关联当前真实 Run（`run_id` 由 Runner 内部传入），不能写进其它 Thread。
+- 现有 `RuntimeDatabase` 与 `RuntimeRepository` 不复制。新增 `WorkspaceRepository` 共用同一 SQLite 连接和写事务；`RuntimeDatabase.init_schema()` 最小追加文件/产物表，无 ORM 或数据库迁移框架。P03 从新安装的文件表为空开始，原 Thread/Run 数据保留。
+- P01 `/api/demo/agent` 和 CLI 默认继续仅注册 `calculate`，没有 WorkspaceContext 也不能调用文件工具；P03 File Tools 仅在 P02 托管 Run 路径注册。
+
+#### 3. 可信身份、文件存储与安全策略（不可弱化）
+
+**磁盘**：默认 `backend/data/workspaces/{thread_id}/`，路径基于 backend，不依赖 cwd；可配置 `WORKSPACE_ROOT_PATH`，必须与 Runtime/Checkpoint SQLite 文件不冲突，拒绝工作区根目录 symlink。每个 Thread ID 必须已登记在业务库且为合法 UUID。目录仅 Thread 一层、不支持用户提供子目录；存储文件名由后端生成 `file_id`/UUID hex，**绝不直接使用浏览器原文件名或模型提供的 filename 作为磁盘路径**。展示文件名保存元数据而非路径。
+
+**POSIX（macOS/Linux）安全读写**：对目录采用 `os.open(...,O_DIRECTORY|O_NOFOLLOW)` 固定 `dir_fd`，在已打开的 Thread 目录 fd 下用 `os.open(...,dir_fd=fd,O_NOFOLLOW|O_CREAT|O_EXCL,...)` 写入 UUID 临时名；文件写完检查大小/sha256、`fsync`，用同目录 `os.link(src,dst,src_dir_fd=...,dst_dir_fd=...,follow_symlinks=False)` + 删除临时名完成**不可覆盖的原子发布**（或另一个明确同等级无覆盖原子方案），打开读取用 `O_NOFOLLOW` + `fstat` 校验常规文件、登记大小/哈希。拒绝符号链接、硬链接非预期文件、不受信任的 workspace 根目录、非 POSIX 能力缺失时 **fail closed**；不可只用字符串前缀、`Path.resolve()` 或“先 `exists()` 再 `open()`”充当 TOCTOU 防护。所有创建文件默认 `0o600`，目录 `0o700`；不从 HTTP 提供真实磁盘绝对路径。**仅限单用户本地回环，不宣称它可防御能直接修改本进程数据目录的同 OS 用户/恶意宿主进程**。
+
+**显示名**：Unicode NFC、1–120 字符，允许中文/空格；拒绝 `/`、反斜杠、NUL、控制字符、`.`、`..`、绝对路径、盘符、首尾空白；Web `Content-Disposition` 使用安全 filename + RFC 5987 编码，不直接拼接不可信 header。相同 Thread 的**产物显示名**不得覆盖已存在产物，返回 `ARTIFACT_NAME_CONFLICT`；上传同名原文件可并存，因选择 `file_id` 无歧义。
+
+**类型与限制**：
+- 接受 `.txt` / `.md` / `.csv` / `.json`（严格 UTF-8，非文本不能伪装），每个最多 **2 MiB**；`.pdf` 最多 **10 MiB**，只校验 PDF 基本签名并以 `application/pdf` 保存，P03 `read_text` 禁止 PDF。
+- Thread 最多 **50 个已登记文件**，合计最多 **30 MiB**；文件工具 `write_text` 仅可创建四种文本后缀，UTF-8 编码后最多 **128 KiB**；`read_text` 最多向模型返回 **64 KiB** 的完整文本，超出就返回明确 `TOOL_READ_LIMIT`，不得静默截断。
+- 上传从 `UploadFile` 每次读取最多 **64 KiB** 并持续计算长度/哈希；不要一次 `await file.read()` 全读入内存，不信任 HTTP `Content-Length`、浏览器 MIME 或扩展名与内容完全一致。请求需要新增 `python-multipart` 并锁版。文件内容是**不可信资料**，不能因为它包含指令而修改 Run 的系统 Prompt、权限/工具白名单。
+- 完成文件存储和数据库登记是两个步骤，任何超额、数据库约束、写异常、任务取消或上传中断都应清理临时/新文件；**不能覆盖旧文件**。可保留原子发布后异常清理的最佳努力行为并标注无法保证跨库/跨文件原子性。下载必须先查元数据关联 Thread、file、artifact，再以无跟随 fd 读取已登记文件，读取完成后将已验证内容返回（文件最大 10MiB），不要先查路径再让 `FileResponse` 二次打开产生 TOCTOU。
+- 请求侧 `thread_id` 仅用于 API 业务归属匹配，**由于暂无登录认证，任何知道本地 HTTP 接口的进程都可枚举 Thread**；P03 不是面向公网的安全多租户隔离。工具侧更严格：所有文件 ID 必须匹配可信 `WorkspaceContext.thread_id`；不得从模型参数取得其它 Thread 的身份。
+
+#### 4. SQLite 元数据与一致性
+
+沿用 P02 `runtime.sqlite3`。新增：
+- `files`: `id TEXT PRIMARY KEY`（`file_id`）；`thread_id TEXT NOT NULL REFERENCES threads(id)`；`run_id TEXT NULL REFERENCES runs(id)`；`display_name TEXT NOT NULL`；`storage_key TEXT NOT NULL UNIQUE`（内部 UUID，非用户原路径）；`kind TEXT CHECK(kind IN ('UPLOAD','ARTIFACT'))`；`mime TEXT`；`size_bytes INTEGER`；`sha256 TEXT`；`created_at TEXT`；对 `thread_id,created_at,id` 建索引；`kind=ARTIFACT` 的产物名在 Thread 内唯一。
+- `artifacts`: `id TEXT PRIMARY KEY`（`artifact_id`）；`file_id TEXT UNIQUE NOT NULL REFERENCES files(id)`；`thread_id TEXT NOT NULL REFERENCES threads(id)`；`run_id TEXT NOT NULL REFERENCES runs(id)`；`created_at TEXT`。插入时需事务验证 `files.kind=ARTIFACT`、`file.thread_id=artifact.thread_id`、`run.thread_id=artifact.thread_id`，不能仅靠前端给的 ID。关联到真实 run 的产物即使 Run 最后 FAILED 也仍保留，并显示实际可下载状态，**不能让模型凭空声称完全成功**。
+- 上传登记与 Thread 额度检查在同一事务；生成文件/Artifact 的双表登记在一个 SQLite 事务。若注册失败，清理本次新文件，保留旧记录与旧文件。文件元数据只含已登记资源，API 禁止直接按磁盘路径检索。
+
+#### 5. HTTP / 模型工具合同
+
+**HTTP**（新路由 `api/files.py`；全部只调用 WorkspaceService/Repository，不手写文件系统路径）：
+
+| 方法 / 路径 | 输入 | 成功行为 |
+|---|---|---|
+| `POST /api/threads/{thread_id}/files` | `multipart/form-data` 字段 `file` 单文件 | 201 `FileRecord`（`id/thread_id/display_name/kind/mime/size_bytes/sha256/created_at`），不返回 storage_key/绝对路径 |
+| `GET /api/threads/{thread_id}/files` | 无 | 200 `FileRecord[]`，按创建时间稳定排序；不存在 Thread 404 |
+| `GET /api/threads/{thread_id}/artifacts` | 无 | 200 `ArtifactRecord[]`，含 `artifact_id/file_id/display_name/size_bytes/mime/run_id/created_at` |
+| `GET /api/artifacts/{artifact_id}?thread_id=<UUID>` | 需要 thread_id 查询值，仅作为本地关联校验 | 200 文件 bytes，可信 MIME 与 `Content-Disposition: attachment`；仅登记 Artifacts，可下载；不存在或归属不符 404 |
+
+新增 GET files 是为了 P03 前端刷新后能列出已上传的真实文件，原计划遗漏此接口。GET artifact 通过 ID+thread_id 校验归属，但由于无认证不能宣称提供多用户权限。
+
+错误为现有 `{"detail":{"code":"...","message":"..."}}`：`THREAD_NOT_FOUND` 404；`FILE_NOT_FOUND`/ `ARTIFACT_NOT_FOUND` 404；`INVALID_FILENAME` / `UNSUPPORTED_FILE_TYPE` / `INVALID_FILE_CONTENT` / `INVALID_FILE_PATH` 422；`FILE_TOO_LARGE` 413；`WORKSPACE_QUOTA_EXCEEDED` 409；`ARTIFACT_NAME_CONFLICT` 409；本地安全能力缺失 `WORKSPACE_UNAVAILABLE` 503。API 错误不能暴露绝对路径、用户文件真实正文、环境变量或内部 SQL。
+
+**LangChain Tools**（新 `tools/file_tools.py`）：
+- `list_files(runtime: ToolRuntime[WorkspaceContext])`：只返回当前 Thread 已登记文件的**有限元信息**（file_id、name、kind、size、mime），最大 50 项。
+- `read_text(file_id: str, runtime: ToolRuntime[WorkspaceContext])`：工具调用 JSON 中只有 `file_id`；校验 File 属于 runtime.context.thread_id，再安全读取对应文本，PDF/过大文件返回稳定错误，不向模型泄露路径。
+- `write_text(filename: str, content: str, runtime: ToolRuntime[WorkspaceContext])`：工具 JSON 只有 filename/content；使用 runtime.context.thread_id + run_id + workspace service 验证归属，新建安全 Artifact，返回包含 `artifact_id/file_id/filename/size` 的结构化 JSON 字符串。旧名冲突直接错误，不覆盖。对预期业务失败返回 P02 可识别的 `ERROR[CODE]: safe message`；不能把故障当作成功工具回执。
+- `WorkspaceContext` 是仅由 Runner 在每次运行构造的 dataclass（`thread_id`、`run_id`、`workspace_service`），通过 `ToolRuntime` 隐式注入，**不能出现在模型可见 Tool JSON Schema 中**。只将这些工具添加到 P02 持久 Thread Run 的 Agent；P01 独立 Demo 和 CLI 保持原工具范围。
+- `agents/lead.py` 在不改变原 Prompt 的前提下允许可选 `context_schema` 透传 `create_agent`；`runtime/streaming.py` 为 `astream` 提供可选 `context`；`runner.py` 每轮创建 Context 并注册 `calculate + file_tools`。应真实验证 `ToolRuntime` 在锁定版本的注入机制。不可把 FileService 放进 Graph 持久 State 或用进程级可变的 `CURRENT_THREAD_ID`。
+- 文件工具和上传页面的失败/错误展示必须清晰；P02 `run_end` 后前端重新拉取文件、Artifact 列表。可在确实取得登记成功 Artifact 时发 `artifact_created` SSE（可选，仅在真正注册完成后），**不得为了事件而推测模型写文件**。不改 P02 Run 终态/Tool Trace 的语义。
+
+#### 6. 新改文件的确定职责
+
+| 路径 | 实现点 |
+|---|---|
+| `backend/pyproject.toml` + `backend/uv.lock` | 新增 `python-multipart`，不无关升级 P02 依赖；uv locked sync |
+| `backend/src/minideerflow/config.py` | `workspace_root_path`、大小/数量阈值固定常量或受界限的 Settings；backend 路径基准 |
+| `backend/src/minideerflow/runtime/db.py`（少量修改） | 添加 files/artifacts DDL 与索引，保持 P02 事务/迁移不变 |
+| `backend/src/minideerflow/workspace/models.py` | `FileKind/FileRecord/ArtifactRecord/WorkspaceError/WorkspaceContext`、严格文件名/扩展名/UTF8 校验 |
+| `backend/src/minideerflow/workspace/storage.py` | `WorkspaceStorage`: 安全打开目录 fd、`save_upload_stream`、`save_text`、`read_registered`、`discard_new`；原子无覆盖、哈希/大小和 symlink 防护 |
+| `backend/src/minideerflow/workspace/repository.py` | `WorkspaceRepository`: `register_upload`、`register_artifact`、`get_file`、`list_files`、`list_artifacts`、`get_artifact`；业务库事务归属/额度/唯一名 |
+| `backend/src/minideerflow/workspace/service.py` | `WorkspaceService`: 先安全写→事务登记→失败清理；上传流、按 thread+file_id 文本读取、按 Run 产物写入、下载 bytes；协调两个数据源而不替换 RunRepository |
+| `backend/src/minideerflow/tools/file_tools.py` | 三项 `@tool`，`ToolRuntime[WorkspaceContext]` 隐式注入；严格不接受客户端 thread/path 参数；返回安全 JSON 或规范 ERROR |
+| `backend/src/minideerflow/api/files.py` | 四个路由、`UploadFile`/Field 校验、HTTP 错误映射和带安全 header 的下载 |
+| `backend/src/minideerflow/main.py` | lifespan 初始化 WorkspaceStorage/Repository/Service，挂载 `app.state.workspace`，传入 RunService；注册 files router；原关闭顺序不变 |
+| `backend/src/minideerflow/agents/lead.py` | 可选 `context_schema`；不改 P01 Prompt/独立路径 |
+| `backend/src/minideerflow/runtime/runner.py` + `streaming.py` | 为 Thread Run 提供可信 Context、注册 file tools、传递 `context=`；原 ToolCall/SSE/Run 成功判定保持；P01/模拟测试可不启用 workspace |
+| `frontend/src/api/files.ts` | `uploadFile/listFiles/listArtifacts/downloadArtifact`（download 必须带当前 Thread ID）；multipart `FormData` 不自行设置 Content-Type |
+| `frontend/src/components/FilesPanel.tsx` | 上传、已上传列表、产物列表、下载；loading/error/上限/PDF 未解析说明；真实 Run 终态后刷新 |
+| `frontend/src/components/ChatPanel.tsx`、`frontend/src/App.tsx`、`frontend/src/styles.css` | 当前 Thread 文件面板及 Run 结束后的文件列表更新；保留 SSE、历史、P01 独立调试区，不添加假数据 |
+| `backend/tests/test_workspace.py`、`test_files_api.py`、`test_file_tools.py` | 真临时目录+临时 SQLite、Fake 模型验证上传/安全 FD/工具注入/跨 Thread/下载与异常，必要时更新 P02 直接消费者测试 |
+| `README.md`、`docs/progress/P03.md`、`.env.example` | 本阶段实际 Demo/路径/限制，三部分各自真实测试+SHA；绝不提交上传内容、Workspace 文件或 Key |
+
+#### 7. A/B/C 实施顺序与各自局部验收
+
+**P03-A：安全 Workspace + 元数据 + 上传/列表 + 可操作前端**
+1. 在已有 P02 全量代码上验证后端/前端依赖和目录；新增 `python-multipart`、Settings、存储安全 FD、文件上传数据表/Repository/Service、`POST /files` 与 `GET /files`、前端 FilesPanel 的上传与真实列表（产物入口预留但不可装作已可下载）。
+2. 实测严格文件名、扩展名、UTF8、PDF 只存储、2/10 MiB 大小、每 Thread 50 项/30MiB、UUID 文件名、原子无覆盖、symlink/dirfd、防跨 Thread 指定文件、超额/异常清理、重启文件仍可列出。无需模型。
+3. 只测 `test_workspace.py`、`test_files_api.py`（上传/列表部分）及直接受影响的 config/health；Ruff、`npm run build`、真实 HTTP 上传+刷新。**A 成功才继续 B。**
+
+**P03-B：真实 File Tools + Artifact 登记/下载 + Agent/前端联动**
+1. 新增 ToolRuntime/Context、`list_files/read_text/write_text`；调整 `build_lead_agent`/Runner/streaming 让**实际 Thread Run**取得 file tools。新增 Artifact 双表登记、GET artifacts 与下载、FilesPanel 实际下载和 Run 结束自动刷新；P01 旧一次性 Agent 不能调用文件工具。
+2. 用假模型真实 Tool Calling 测试：上传两个文本（含中文）；本 Thread `list_files/read_text`、`write_text("summary.md","...")` 产出真实 artifact_id 与下载正文；不同 Thread 的 file_id 不可读；Agent 不得提供 thread_id/run_id 作为模型参数；拒绝 PDF read、越界 UTF8、恶意文件名与覆盖；失败 ToolMessage 可见 ERROR、失败 Run 不报假成功。工具返回不含宿主机路径或私人凭据。
+3. 局部测试 `test_file_tools.py`、`test_files_api.py`、`test_workspace.py` 和直接受影响的 `test_runner.py/test_lead.py/test_runs_api.py`，Ruff/TS Build + Fake HTTP/真实浏览器；**B 成功才继续 C。**
+
+**P03-C：跨重启、异常安全、实际联调与可读性收尾**
+1. 复核文件 SHA/归属、下载实际内容与 MIME/header；应用重启重新打开两库，文件/Artifact 元信息与文件本体仍存在；模拟上传中断/元数据提交失败/同名产物争用，确保不覆盖旧文件、不暴露未登记临时文件。
+2. 前端上传文本文档→Agent 用真实文件工具读入→根据指令创建 `summary.md`→网页可下载；按当前 Thread 的 Run 结束状态刷新，页面 reload 后仍可下载。若模型配置有效，做单独真实模型 Tool Calling Smoke；不可用则注明 `REAL_MODEL_FILE_SMOKE_BLOCKED`，Fake 测试不冒充真实。
+3. 保留 P01/P02 路由/Checkpoint/SSE/Token/工具轨迹功能；中文关键注释，长逻辑 1/2/3 分段。仅运行 P03 新改及直接受影响用例、Ruff 和前端构建；逐项记录 A/B/C 测试命令、结果、提交 SHA、实际界面测试、未验项，末尾标 `PENDING_REVIEW` 并等待用户手动验收。不得进入 P04。
+
+**参考**：DeerFlow v2.0.0 源码 `backend/packages/harness/deerflow/sandbox/security.py`（本地并非真实安全沙箱）、`backend/packages/harness/deerflow/sandbox/local/local_sandbox.py`（路径映射；**不要复制 Host Bash**）、`backend/app/gateway/routers/uploads.py`（上传分块和上限）；LangChain 官方 [ToolRuntime 与注入](https://docs.langchain.com/oss/python/langchain/runtime)、[create_agent](https://reference.langchain.com/python/langchain/agents/factory/create_agent)；FastAPI [UploadFile 与 python-multipart](https://fastapi.tiangolo.com/tutorial/request-files/)；Python [dir_fd/O_NOFOLLOW](https://docs.python.org/3/library/os.html)。Codex 只阅读当阶段相关源码/当前本地锁定签名，不擅自扩大系统范围。
+
+**停止条件**：若本地平台不支持所要求的原子 no-follow 路径安全、官方 Runtime Context 隐式 Tool 注入无法与锁定版本兼容、任何 Thread 跨越/覆盖风险或关键测试失败，**停止下一子任务**、提供复现证据并等用户决定。不能通过松绑安全约束“把功能跑起来”。所有测试用临时两库/临时工作区、Fake 模型，不读写用户真实文件/密钥，不记录上传正文到日志；Git 不跟踪 workspace 文件。用户授权启动 P03 设计，**不表示允许自行合并 P02 到 main、清除 P02 审核状态或自动开始 P04**。
+
 
 ### P04 — Todo 规划、任务委派与 Sub-Agent
 
