@@ -24,9 +24,12 @@ async def stream_agent(
     on_graph_start: Callable[[], None] | None = None,
     context: Any | None = None,
     initial_state_extra: dict | None = None,
+    recursion_limit: int | None = None,
 ) -> AgentResponse:
     """以框架流执行一次 Run，只验收当前新增消息，排除 Checkpoint 的旧历史。"""
     config = thread_config(thread_id)
+    if recursion_limit is not None:
+        config["recursion_limit"] = recursion_limit
     # 1. 用运行前已保存的消息 ID 划出本轮边界，不从 Run 表拼接模型上下文。
     previous = await agent.aget_state(config)
     old_ids = {m.id for m in previous.values.get("messages", []) if m.id}

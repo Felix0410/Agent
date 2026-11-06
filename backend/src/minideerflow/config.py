@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     workspace_root_path: Path = Path(__file__).resolve().parents[2] / "data/workspaces"
     run_max_concurrency: int = Field(default=2, ge=1, le=2)
     run_queue_size: int = Field(default=8, ge=1, le=8)
+    # P04 父持久 Run 与 P01 单轮时限分离；上限与前端180秒轮询保持一致。
+    run_timeout_seconds: float = Field(default=150, gt=0, le=150)
+    subagent_timeout_seconds: float = Field(default=35, gt=0, le=35)
+    subagent_recursion_limit: int = Field(default=14, ge=2, le=14)
+    max_subagent_concurrency: int = Field(default=3, ge=1, le=3)
+    max_subagent_calls_per_run: int = Field(default=4, ge=1, le=4)
 
     @field_validator("runtime_db_path", "checkpoint_db_path", mode="before")
     @classmethod

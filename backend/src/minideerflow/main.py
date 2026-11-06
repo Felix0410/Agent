@@ -19,6 +19,7 @@ from minideerflow.runtime.plan_repository import PlanRepository
 from minideerflow.runtime.plan_service import PlanService
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.runner import RunService
+from minideerflow.runtime.task_registry import TaskRegistry
 from minideerflow.workspace.repository import WorkspaceRepository
 from minideerflow.workspace.service import WorkspaceService
 from minideerflow.workspace.storage import WorkspaceStorage
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.checkpointer = saver
         app.state.repository = repository
         app.state.plans = PlanRepository(database)
+        await app.state.plans.reconcile_orphaned_subtasks()
         storage = WorkspaceStorage(settings.workspace_root_path)
         storage.open()
         stack.callback(storage.close)
@@ -51,6 +53,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         events.start()
         stack.push_async_callback(events.shutdown)
         app.state.events = events
+        registry = TaskRegistry(
+            settings.max_subagent_concurrency, settings.max_subagent_calls_per_run
+        )
+        app.state.task_registry = registry
+        stack.push_async_callback(registry.shutdown)
         runner = RunService(
             repository,
             saver,
@@ -58,6 +65,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             events=events,
             workspace=app.state.workspace,
             plans=PlanService(app.state.plans),
+            task_registry=registry,
         )
         runner.start()
         stack.push_async_callback(runner.shutdown)

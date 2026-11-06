@@ -19,6 +19,7 @@ from minideerflow.runtime.models import RunAccepted, RunDto, RunStatus
 from minideerflow.runtime.plan_service import PlanService
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.streaming import stream_agent
+from minideerflow.runtime.task_registry import TaskRegistry
 from minideerflow.tools.calculator import calculate
 from minideerflow.tools.file_tools import list_files, read_text, write_text
 from minideerflow.tools.task_tool import task
@@ -50,7 +51,11 @@ class RunService:
         model_factory: Callable[[Settings], BaseChatModel] | None = None,
         workspace: WorkspaceService | None = None,
         plans: PlanService | None = None,
+        task_registry: TaskRegistry | None = None,
     ) -> None:
+        self.task_registry = task_registry or TaskRegistry(
+            settings.max_subagent_concurrency, settings.max_subagent_calls_per_run
+        )
         self.plans = plans
         self.events = events
         self.workspace = workspace
@@ -141,7 +146,11 @@ class RunService:
                 p04 = self.plans is not None
                 if p04:
                     dispatcher = TaskDispatcher(
-                        self.plans.repository, lambda: self.model_factory(self.settings)
+                        self.plans.repository,
+                        lambda: self.model_factory(self.settings),
+                        self.task_registry,
+                        timeout=self.settings.subagent_timeout_seconds,
+                        recursion_limit=self.settings.subagent_recursion_limit,
                     )
                     context = AgentRunContext(
                         run.thread_id,
@@ -168,16 +177,24 @@ class RunService:
                 # 旧单轮路径及无Workspace的局部Fake注入保持原工具范围。
                 agent = build_lead_agent(model, [calculate], self.checkpointer)
             # 2. 整轮而非单次模型 HTTP 请求有时限；历史由 Checkpointer 自动传入。
-            async with asyncio.timeout(self.settings.model_timeout_seconds):
-                response = await stream_agent(
-                    agent,
-                    run.thread_id,
-                    run.input_message,
-                    event_sink=lambda kind, payload: self._emit(run.id, kind, payload),
-                    on_graph_start=mark_graph_started,
-                    context=context,
-                    initial_state_extra={"todos": []} if self.plans else None,
-                )
+            try:
+                async with asyncio.timeout(
+                    self.settings.run_timeout_seconds
+                    if self.plans
+                    else self.settings.model_timeout_seconds
+                ):
+                    response = await stream_agent(
+                        agent,
+                        run.thread_id,
+                        run.input_message,
+                        event_sink=lambda kind, payload: self._emit(run.id, kind, payload),
+                        on_graph_start=mark_graph_started,
+                        context=context,
+                        recursion_limit=36 if self.plans else None,
+                        initial_state_extra={"todos": []} if self.plans else None,
+                    )
+            finally:
+                await self.task_registry.close_run(run.id)
             # 3. 只有有效的本轮最终消息才能写入 SUCCEEDED。
             await self._emit(run.id, "assistant_final", {"answer": response.answer})
             await self.repository.complete_run(

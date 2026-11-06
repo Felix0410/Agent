@@ -7,7 +7,7 @@ import {
   startRun,
   subscribeRunEvents,
 } from "../api/runtime";
-import type { TodoItem, RunDto, ThreadDto } from "../api/runtime";
+import type { TaskRecord, TodoItem, RunDto, ThreadDto } from "../api/runtime";
 import RunStatus from "./RunStatus";
 import type { LiveRun } from "./RunStatus";
 
@@ -21,7 +21,7 @@ export default function ChatPanel({
   onThreadUpdate: (thread: ThreadDto) => void;
   onRunFinished: () => void;
 }) {
-  const [planRevision,setPlanRevision] = useState(0);
+  const [planRevision, setPlanRevision] = useState(0);
   const [runs, setRuns] = useState<RunDto[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -70,7 +70,7 @@ export default function ChatPanel({
     async function poll() {
       clearTimeout(timer);
       const ticket = ++version;
-      setPlanRevision(old=>old+1);
+      setPlanRevision((old) => old + 1);
       try {
         const run = await getRun(activeRun!);
         if (!live || ticket !== version) return;
@@ -111,8 +111,55 @@ export default function ChatPanel({
       (event) => {
         if (!live) return;
         const p = event.payload;
+        if (
+          event.type.startsWith("subtask_") &&
+          typeof p.task_id === "string"
+        ) {
+          // 真实服务端事件先更新同 ID，再 GET 补齐持久化字段和遗漏事件。
+          const id = p.task_id;
+          setLiveRun((old) => {
+            const prior = old.subtasks?.[id];
+            if (!prior && event.type !== "subtask_created") return old;
+            const base: TaskRecord = prior ?? {
+              id,
+              run_id: event.run_id,
+              thread_id: event.thread_id,
+              agent_type: String(p.agent_type),
+              description: String(p.description),
+              todo_id: typeof p.todo_id === "string" ? p.todo_id : null,
+              status: "PENDING",
+              result_summary: null,
+              error_code: null,
+              source_file_ids: [],
+              truncated: false,
+              created_at: event.timestamp,
+              started_at: null,
+              finished_at: null,
+            };
+            const updated = {
+              ...base,
+              status: p.status as TaskRecord["status"],
+            };
+            if (event.type === "subtask_started")
+              updated.started_at = event.timestamp;
+            if (event.type === "subtask_completed") {
+              updated.result_summary = String(p.summary ?? "");
+              updated.source_file_ids = Array.isArray(p.source_file_ids)
+                ? (p.source_file_ids as string[])
+                : [];
+              updated.truncated = p.truncated === true;
+              updated.finished_at = event.timestamp;
+            }
+            if (event.type === "subtask_failed") {
+              updated.error_code = String(p.error_code ?? "SUBTASK_FAILED");
+              updated.finished_at = event.timestamp;
+            }
+            return { ...old, subtasks: { ...old.subtasks, [id]: updated } };
+          });
+          setPlanRevision((old) => old + 1);
+        }
         if (event.type === "todo_updated" && Array.isArray(p.todos)) {
-          setLiveRun(old=>({...old,todos:p.todos as TodoItem[]}));
+          setLiveRun((old) => ({ ...old, todos: p.todos as TodoItem[] }));
         }
         if (
           event.type === "assistant_delta" &&

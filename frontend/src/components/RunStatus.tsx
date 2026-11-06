@@ -1,11 +1,12 @@
 import TaskPanel from "./TaskPanel";
 import TodoPanel from "./TodoPanel";
-import type { TodoItem } from "../api/runtime";
+import type { TaskRecord, TodoItem } from "../api/runtime";
 import type { RunDto } from "../api/runtime";
 
 /** 只展示持久化终态，不把模型的“完成”措辞作为成功证据。 */
 export type LiveRun = {
   todos?: TodoItem[];
+  subtasks?: Record<string, TaskRecord>;
   fragments: Record<string, string>;
   answer: string | null;
   tools: Record<
@@ -30,8 +31,18 @@ export default function RunStatus({
         {run.input_message}
       </p>
       <p>状态：{run.status}</p>
-      <TaskPanel runId={run.id} status={run.status} revision={planRevision} />
-      <TodoPanel runId={run.id} status={run.status} snapshot={live?.todos} revision={planRevision} />
+      <TaskPanel
+        runId={run.id}
+        status={run.status}
+        revision={planRevision}
+        snapshot={live?.subtasks}
+      />
+      <TodoPanel
+        runId={run.id}
+        status={run.status}
+        snapshot={live?.todos}
+        revision={planRevision}
+      />
       {run.status === "SUCCEEDED" && <output>{run.answer}</output>}
       {live && !["SUCCEEDED", "FAILED", "CANCELLED"].includes(run.status) && (
         <div aria-live="polite">
