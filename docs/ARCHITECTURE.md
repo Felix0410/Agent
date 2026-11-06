@@ -1,7 +1,7 @@
 # 总体业务与系统架构（正式方案）
 
-**版本**：v1.2 · 2026-11-06  
-**状态**：V1 总体架构确定；P01 单 Agent/FastAPI/React 已在开发分支实现，P02 Thread/Run/SSE 已完成详细设计但尚未编码。阶段范围和接口细节以 [DEVELOPMENT.md](DEVELOPMENT.md) 为准，不能把设计视为已实现。  
+**版本**：v1.3 · 2026-11-06  
+**状态**：V1 总体架构确定；P01 Agent 与 P02 Thread/Run/SSE 已在开发分支实现（P02 仍待用户手动验收）；P03 Workspace/File Tools/Artifact 详细设计已完成，业务代码尚未开始。实际进度与接口以 [DEVELOPMENT.md](DEVELOPMENT.md) 及 `docs/progress/` 为准，不能将设计视为已实现。  
 **参考基线**：[DeerFlow 2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，commit `7e7f0410797693cf882594555ba414e0361d4c6f`。本项目自行实现，不 Fork 原项目。
 
 ## 1. 目标与边界
@@ -116,6 +116,14 @@ docs/tasks/                 # 当阶段 Codex 执行清单
 ```
 
 上面注释为模块落地顺序，不表示未来模块已经创建。后端仍为单体，不按模块拆微服务，不构建两套 Agent 框架。API 只能调用应用服务，不把 Run 生命周期、LLM 调用和路径校验都塞进 Router。
+
+### 3.3 P03 Workspace 安全域（具体实施见 DEVELOPMENT.md）
+
+P03 在现有 `backend/src/minideerflow/` 包下新增 `workspace/{models,storage,repository,service}.py`、`tools/file_tools.py`、`api/files.py`，在当前 React `ChatPanel` 旁加入 `FilesPanel`。文件保存在被 Git 忽略的 `backend/data/workspaces/{thread_id}/`，文件真实路径只在服务端管理；所有上传、生成、Artifact 查询均登记到业务 SQLite。
+
+**可信授权**：Thread Run 在后端构造 `WorkspaceContext(thread_id,run_id,workspace_service)`，由 `create_agent(context_schema=...)` / `ToolRuntime` 注入文件工具，不将这几个身份字段开放给模型参数。工具读取仅使用登记过的 file_id；写入仅接受安全显示名和文本；禁止宿主机 Shell/Python/任意路径与对已有文件覆盖。注意这是单用户本地范围内的文件安全边界，**不是认证的多租户隔离或容器沙箱**。
+
+文件系统以 UUID 内部名、目录文件描述符和不跟随符号链接实现安全访问；数据库记录文件与产物归属和大小/sha256。附件最初只支持 UTF-8 文本及 PDF 原样保存；PDF 解析留待 P08，RAG 与复杂文件操作不属于 P03。
 
 ## 4. 模块职责与接口
 
