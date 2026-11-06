@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P02-B/C/D 已实现并验证，P02 为 PENDING_REVIEW，等待用户手动验收；未进入 P03。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P01/P02 后端和 React 代码已实现；P02 仍为 PENDING_REVIEW，尚未在此确认用户手动验收。P03 Workspace / File Tools / Artifact 已启动并完成详细设计，目前仅 PLAN_READY、业务代码尚未实现。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -35,10 +35,11 @@
 | [完整开发方案](docs/DEVELOPMENT.md) | P00–P09 增量开发任务、局部测试规则、每阶段验收、Codex 协作 |
 | [P02-A Codex 执行清单](docs/tasks/P02-A.md) | 可按文件实施的 SQLite / Checkpointer / Thread API 与前端同步任务 |
 | [P02-B/C/D 联合执行任务书](docs/tasks/P02-BD.md) | 一次性交给 Codex，按 B→C→D 连续实现、分别测试提交并同步前端 |
+| [P03-A/B/C 实施任务书](docs/tasks/P03-ABC.md) | 本阶段 Workspace / ToolRuntime / Artifact 三任务的逐文件编码、局部测试与安全约束 |
 | [代码可读性与 Codex 规则](AGENTS.md) | 中文注释、复杂逻辑编号分段、只测本次变更、同步前端 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
-**执行原则**：逐阶段落地并记录真实测试与 Git SHA；每次开发任务同步 Web 验证台。P02-A 已交付；用户现已授权 B/C/D 一次性交给 Codex 顺序实现，B/C/D 各自局部测试与独立提交，关键失败则停止，最终仍待用户验收。
+**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次开发任务同步 Web 验证台。P02 A/B/C/D 已交付并等待最终用户手动验收；用户请求启动 P03，详细规格和逐文件 Codex 清单已提交到 P03 开发分支。P03 按 A→B→C 逐项运行局部测试和提交，若出现文件安全/权限边界问题立刻停止。
 
 ## P00 本地开发
 
@@ -178,4 +179,11 @@ B 72 passed；C 94 passed；D最终136 passed（0 failed）。每一部分分别
 
 真实模型独立Smoke：deepseek-flash，临时两库，三次HTTP202、SSE200、GET Run均SUCCEEDED。首轮记住测试口令、第二轮正确回答 Cedar-482；第三轮实际calculate(expression="(12+8)*3")返回60，SSE的tool_start/tool_end ID匹配，三轮收到真实文本增量。未记录密钥/认证头/模型隐藏内容；真实模型的重启后记忆和故障注入仅通过Fake覆盖，未额外消费额度。
 
-PyCharm GUI断点和用户最终Demo验收待人工完成。开发使用的临时Fake/真实Smoke服务不是正常启动配置；完成后会关闭并删除临时库，用户需自行启动后端。详细SHA、真实命令、失败修复与推送状态见 [P02进度](docs/progress/P02.md)。不合并main、不开始P03。
+PyCharm GUI断点和用户最终Demo验收待人工完成。开发使用的临时Fake/真实Smoke服务不是正常启动配置；完成后会关闭并删除临时库，用户需自行启动后端。详细SHA、真实命令、失败修复与推送状态见 [P02进度](docs/progress/P02.md)。不合并 main；P03 已获准开始设计，P02 尚不标为已手动验收。
+
+
+## P03 Workspace 与 Artifact（设计已完成、等待代码）
+
+当前 [P03 开发方案](docs/DEVELOPMENT.md) 与 [Codex 执行清单](docs/tasks/P03-ABC.md) 仅定义**待开发**功能：当前 Thread 上传 UTF-8 TXT/MD/CSV/JSON 或原样存储 PDF；Agent 通过可信 LangChain ToolRuntime 上下文访问已登记的文件，执行 `list_files/read_text/write_text`，把生成文件登记为 Artifact 后由浏览器下载；文件系统以不跟随符号链接、UUID 存储名、文件描述符及无覆盖原子发布保证本地范围的文件访问安全。限制为文本上传 2 MiB、PDF 10 MiB、每 Thread 50 文件共 30 MiB；PDF 解析留到 P08。
+
+阶段实施：P03-A 安全存储/上传/前端文件列表，P03-B File Tools/Artifact 下载/前端联动，P03-C 重启/异常测试与 Demo 收尾。**目前没有 P03 的运行成果、上传记录或通过的测试。** `docs/progress/P03.md` 用于逐任务记录真实提交及结果。P01/P02 原有功能应始终保留。
