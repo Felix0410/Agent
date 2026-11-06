@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P01 单 Agent + 极简 Web 验证台已实现，待审核；计算器/页面和 Mock Agent 已验证，AgentService 真实模型问答及工具调用已验证，配置修正后的 Web/CLI 待复核。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P01 单 Agent + 极简 Web 验证台已实现（仍待最终人工审核）；P02 Thread/Run/Checkpoint/SSE/Web 已完成详细设计并提交到 `feat/p02-runtime-web` 分支，P02 业务代码尚未开始。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -33,10 +33,11 @@
 |---|---|
 | [总体业务与系统架构](docs/ARCHITECTURE.md) | 功能范围、真实业务流程、模块边界、状态、接口、技术栈、DeerFlow 源码参考 |
 | [完整开发方案](docs/DEVELOPMENT.md) | P00–P09 增量开发任务、局部测试规则、每阶段验收、Codex 协作 |
+| [P02-A Codex 执行清单](docs/tasks/P02-A.md) | 可按文件实施的 SQLite / Checkpointer / Thread API 与前端同步任务 |
 | [代码可读性与 Codex 规则](AGENTS.md) | 中文注释、复杂逻辑编号分段、只测本次变更、同步前端 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
-**执行原则**：逐阶段落地并记录真实测试与 Git SHA；P01 起每次开发任务都同步更新极简 Web 测试台（内部改动无前端可见行为时记录原因）；最小可执行 Demo 完成后再由用户手动测试。P01 等待审核，不进入 P02。
+**执行原则**：逐阶段落地并记录真实测试与 Git SHA；P01 起每次开发任务都同步更新极简 Web 测试台（内部改动无前端可见行为时记录原因）；最小可执行 Demo 完成后再由用户手动测试。P01 尚待用户最终人工审核；P02 设计已就绪，开始编码前需核验最新代码和分支，不能把 PLAN_READY 当作实现完成。
 
 ## P00 本地开发
 
@@ -121,3 +122,10 @@ uv run ruff format --check src tests
 最终实测 **59 passed**，Ruff 通过；`npm ci` 与 `npm run build` 通过。Mock 验证框架内模型→工具→模型链路，不能替代真实模型 Smoke；页面中的成功 Agent 回答/轨迹也尚未在真实提供方验证。详细记录见 [P01 进度](docs/progress/P01.md)。PyCharm 可直接运行/调试 main.py，模型配置填写根目录 `.env`；图形界面断点命中待人工验证。
 
 参考上游：[bytedance/deer-flow v2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，固定 commit 为 `7e7f0410797693cf882594555ba414e0361d4c6f`。参考实现不等于复用全部源码；实际复制或改编受许可代码时保留适用的 MIT 版权与许可声明。
+
+
+## P02 运行时设计（待编码）
+
+P02 将基于现有 P01 分支开发 Thread、Run、SQLite Checkpoint、后台执行、SSE 和简易会话 UI。完整的**数据表、状态机、API/SSE 协议、逐文件职责、子任务 A/B/C/D、局部测试与停止条件**已写入 [DEVELOPMENT.md · P02](docs/DEVELOPMENT.md)；[P02 进度](docs/progress/P02.md) 当前为 `PLAN_READY`，没有 P02 代码或测试结果。
+
+Codex 第一份可执行任务为 [docs/tasks/P02-A.md](docs/tasks/P02-A.md)，专门实现数据库、Checkpointer、Thread API 与前端真实会话列表，并将 P01 中文注释/排版的局部复验合并处理。后续 B/C/D 仍要按阶段方案逐个实施，每次同步已有的 Web 测试台。
