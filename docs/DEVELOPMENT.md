@@ -842,29 +842,112 @@ P03 实际已有 `agents/lead.py:build_lead_agent(model,tools,checkpointer,conte
 **停止条件**：若 `ToolRuntime + Command`/自定义 `AgentState` 无法在锁定版本安全工作、并发写 State 存在隐性竞态、子代理越权/复用父 Saver、执行取消仍留下活跃 child、关键安全测试失败，Codex 停在最近可验证提交并上报复现证据；不得为了 Demo 放宽范围。阶段与 git 进度必须如实记录，不写假测试数字、不改 P02/P03 待验收状态。
 
 
-### P05 — 统一 ToolRegistry、MCP 适配器与 Skills
+### P05 — ToolRegistry / 受控 MCP / 按需 Skills（2026-11-06 正式详细设计）
 
-**业务链**：Lead 请求可用工具 → Registry 合并内置工具与经批准的 MCP 工具 → ToolExecutor 统一校验权限/超时/异常 → 模型按需选择工具；当任务需要某种工作方法时，`list_skills/read_skill` 只加载对应 SKILL.md 的正文。**MCP 是工具来源，Skill 是执行说明，二者不是同一套运行机制。**
+> **状态：PLAN_READY（只有方案和 GitHub 任务合同；P05 代码尚未开发、没有 P05 测试结果）**。用户于 2026-11-06 要求“设计 p5”，不等于此前 P02/P03/P04 手动验收通过，也不代表已运行 Codex。分支 `feat/p05-tools-mcp-skills` **从已有 P04 A/B/C/D 完整代码的** `feat/p04-planning-subagents` 派生。独立 [P05-A/B/C/D 逐文件执行合同](tasks/P05-ABCD.md) 是交付 Codex 的唯一执行清单；严格 A→B→C→D，各自局部测试、前端同步、单独提交，关键失败停止，不进入 P06。
 
-| 新增/修改文件 | 编码必须完成的具体内容 |
-| --- | --- |
-| `tools/registry.py` | `ToolRegistry.register/get/list_allowed`：按唯一名字注册工具（重名直接拒绝，不静默覆盖）；每项含 ToolSchema、权限级别、超时与来源；合并 P01、P03、P04 工具及 MCP Tool。 |
-| `tools/executor.py` | `execute(tool_name,arguments,policy,context)`：先检查名字、权限、参数，再执行指定工具；按工具声明区分 read/write，超时、错误统一封装；未来网络有副作用操作遇未知结果不得盲重试。若 LangChain 的 tool lifecycle 与调用链不匹配，使用框架支持的 Middleware 包裹执行，避免另造与框架竞争的工具主循环。 |
-| `tools/mcp_adapter.py` | 用 `langchain-mcp-adapters` 的现成 Client/工具转换接入配置好的 MCP Server，映射工具名/Schema/说明，执行统一转交 ToolExecutor；MCP 连接失败分类为 `MCP_UNAVAILABLE`，不能影响内置工具。 |
-| `core/mcp_settings.py` | 使用明确的本地配置（如 `MCP_SERVERS` 或单个受控配置文件）声明 server_id、transport、URL/command、timeout、allowlist；第一版只允许用户预先配置的只读 Server，禁止模型自动新增任意 stdio command。 |
-| `skills/models.py` | `SkillMeta(name,description,path,allowed_tools)`，记录必要元信息，不将所有正文常驻系统 Prompt。 |
-| `skills/loader.py` | `discover_skills(root)` 读取受控本地 Skills 目录，`load_skill(name)` 使用安全 YAML 解析（需要时加入 PyYAML），验证名称唯一、正文大小上限、所需工具是否存在；禁止从任意 URL 自动下载安装 Skill。 |
-| `tools/skill_tools.py` | `list_skills()` 输出名称/简介，`read_skill(name)` 返回本地 Skill 必要正文；模型只在需要时加载，激活不改变执行器 allowlist。 |
-| `skills/public/example-research/SKILL.md` | 一个实际可执行的最小模板：输入目标、检索步骤、来源标注、输出规范；当前不实现 P07 的全部 Research 业务。 |
-| `tests/test_tool_registry.py`、`tests/test_mcp.py`、`tests/test_skills.py` | 重名、拒绝越权、参数错误、超时、MCP 断开、坏 YAML、Skill 工具不存在、超长 Skill、只读权限下执行写工具被拒绝。 |
+#### 1. 用户业务与核心边界
 
-**固定权限策略**：工具默认 `DENY`，按 Run/角色显式构造 `allowed_tools`；子 Agent 可用工具是“父权限 ∩ 角色权限 ∩ 本次任务授权”，任何 Skill 提示都无权提升权限。ToolExecutor 对工具的名字和参数做可复验的检查，输出有明确错误代码、脱敏 Trace 和长度上限。不允许把远程 MCP 返回文本当成系统指令。
+本阶段的业务闭环是：用户向已有 Thread 提交任务 → Lead 的原有 `create_agent` 自动选择已授权工具 → `ToolRegistry` 为当前 Run 组装**内置工具 + 用户事先批准的 MCP 工具 + Skill 元工具** → LangChain 官方工具执行路径由 `ToolGuardMiddleware` 校验权限/参数/超时，正常工具按原方式返回 `ToolMessage` 或 `Command` → `list_skills/read_skill` 按需读本地 SKILL.md，仅作为模型可见的说明文本而不是提升权限 → P04 Todo/Task/Run/SSE、P03 Artifact 保持可用。
 
-**实现次序**：P05-A Registry/Executor → P05-B 单个只读 MCP Server/失败处理 → P05-C Skill Parser/Tool → P05-D 权限与直接受影响的 Agent Tool Calling 测试。
+**P05 不做**：让模型选择/安装任意 MCP Server；外网任意 MCP URL、任意 stdio shell/command、OAuth/token 管理、用户网页登录、通用远程搜索/抓取（留给 P07）、Skill 在线市场/安装/自动执行代码、MCP resources/prompts/sampling/elicitation、动态每请求权限审批、通用消息队列或自研 Agent 工具循环、P06 上下文压缩。研究方向仍然没有联网检索。**只在明确配置/批准后接入本机回环、只读 Streamable HTTP MCP。**
 
-**局部验收**：不改 Lead Agent 的核心循环即可注册一个新的 MCP Tool 与一个 Skill；连通实际可用的只读 MCP Server 或如实说明环境无法连接；工具不可通过 Skill/委派绕过授权。仅测对应的 registry/mcp/skills 测试及直接 Tool 集成。
+**概念边界**：
+- Tool：一个真实可调用的 LangChain `BaseTool`，通过框架 `create_agent` 的现有 ToolNode 运行。
+- MCP：Tool 的一种**外部来源**。批准某个 MCP Server 的工具并不表示其真实无副作用；当前只连接自己事先启动、可信且功能无副作用的本地示例服务。
+- Skill：受控本地 SKILL.md 的元信息与执行说明，不能自行调用工具、改变 Agent 系统提示词、扩展工具白名单或修改文件；本期通过 `list_skills/read_skill` 工具让模型按需阅读。
+- 统一执行：**不重写 LangGraph/ToolNode 主循环**；用官方 `AgentMiddleware.awrap_tool_call` 做前置 Policy 和错误边界。框架自己完成参数注入、ToolCall/ToolMessage/Command 的对应；Middleware 绝不双重执行 handler。
 
-**DeerFlow 参考**：`backend/packages/harness/deerflow/tools/tools.py`、`mcp/tools.py`、`skills/parser.py`、`skills/tool_policy.py`、`agents/middlewares/skill_activation_middleware.py`，所有均位于 `backend/packages/harness/deerflow/` 根下。
+**可验收 Demo**：启动仓库内只读 MCP 示例服务，配置批准它的 `lookup_fact` → 页面“可用工具”出现 `mcp_demo_lookup_fact` → 新建 Thread 提问固定事实或本地资料 → 真实 Run 的 Tool Trace 记录 `mcp_demo_lookup_fact` 的调用与回执；再让 Lead `list_skills/read_skill("file-analysis")` 加载指南，照指南用 P03 的 `list_files/read_text/write_text` 生成 summary.md（只在用户要求生成文件时） → 页面能下载产物。将 MCP Server 关闭后，内置计算/文件/Task 不受影响；重新启动应用可发现其恢复。模型是否主动选工具不确定，必须同时有 Fake 的确定性调用测试和真实模型单独 Smoke，不能编造结果。
+
+#### 2. 真实代码接入点与技术选型
+
+P04 实际源码：`agents/lead.py:build_lead_agent(model, tools, checkpointer, context_schema, state_schema, prompt_suffix)`；`runtime/runner.py:RunService._execute_run` 直接创建 `tools=[calculate,list_files,read_text,write_text,write_todos,task]`，将 `AgentRunContext` 注入图；`agents/subagents/dispatcher.py` 严格注册子 Agent 的三个只读工具且取父 Context 的 `allowed_tools` 交集；`tools/todo_tool.py` 返回带 `ToolMessage` 的 `Command`，`tools/task_tool.py` 同步委派；`runtime/streaming.py` 处理真实 `AIMessage/ToolMessage` 与 SSE；`frontend/src/RunStatus/ChatPanel` 显示每次真实工具调用。**必须复用这些入口**，不另开执行器或重复流式桥接。
+
+依赖方案：新增 `langchain-mcp-adapters`、MCP Python SDK（`mcp` 以直接依赖或锁定的子依赖出现，排除已知不安全旧版本）、`PyYAML`，仅这三类；采用`uv add`、`uv lock --check` 和本地签名兼容样例确认锁定版本，避免无关升级。MCP 客户端采用 `MultiServerMCPClient`、`get_tools(server_name=...)` 和 `tool_name_prefix` 相关能力，但**别同时套用新版 LangChain 内置 MCPAdapter 的不同 API**；以本项目最终锁版确切签名/返回 ToolMessage 格式为准。HTTP transport 只接受本机 `127.0.0.1` 的 `streamable_http`（适配器实际连接字面量可能叫 `streamable_http` 或 `http`，须实测映射），不使用历史 SSE transport。前置校验 SSRF/URL/重定向，信任边界不因只读工具自动消失。
+
+#### 3. ToolRegistry、Policy、Middleware 的一致合同
+
+新增 `tools/registry.py`：
+- `ToolDefinition(name,tool,source,permission,timeout_seconds,origin,description)`，`source="builtin"|"mcp"|"skill"`；`permission="read"|"write"|"orchestrate"`，**Tool 名全局唯一**，重复包含内置名/别名都拒绝 `TOOL_DUPLICATE`，不覆盖已有工具。Registry 在应用 lifespan 构建并固定**快照**，不让模型运行时动态登记。注册的实际 LangChain `BaseTool` 是单一工具事实源，不自写与现有 Tool JSON Schema 不一致的镜像。
+- `register(def)`、`get(name)`、`list_allowed(policy)`、`list_catalog()`；`list_allowed` 只返回获得许可的工具对象给 `create_agent`，同时在 Middleware 再次验证。允许空 MCP 清单，**内置工具一直可用**。
+- 父工具合同照旧：`calculate/read_text/list_files/write_text/write_todos/task`；若 P04 Context 未提供则仅原 P01 demo 的 calculate；子 Agent 本期**不增加 MCP 或 Skills**，仍只保留 P04 `general:calculate/list_files/read_text` 和 `research:list_files/read_text`，保持 P04 research“仅已有材料”的含义。未来变更子 Agent 可用外部工具必须另行设计/审批。
+- `ToolPolicy` 由可信 `AgentRunContext` 和角色创建，含 `allowed_names`、`allowed_permissions`、`run_id/thread_id`；默认 DENY，不根据模型输出、Skill 文本或 MCP 描述自动开放。Lead 默认沿用 P04 六个原有工具 + `list_skills/read_skill`，MCP 仅加入明确批准的工具；P04 `context.allowed_tools` 必须同步当前 Run 快照，让 Dispatcher 的父权限交集不退化。
+
+新增 `tools/executor.py`：
+- 类 `ToolGuardMiddleware`，使用实际已锁版 `AgentMiddleware.awrap_tool_call(request,handler)`，先取得 request.tool_call 的 name/id/args 和**服务端 Context**，校验 Registry 真实 name、Run 所属、当前 Policy 允许、`read/write/orchestrate`、参量类型/大小与工具的官方 `args_schema`，再 `await asyncio.wait_for(handler(request), timeout=definition.timeout_seconds)`。对已知失败返回**带相同 tool_call_id、status="error" 的 ToolMessage**，消息为 `ERROR[CODE]:...`；绝不假装 success。不可捕获/吞掉 `CancelledError`，不因为超时自动重复调用有副作用工具。
+- **保留框架类型**：正常执行返回原 `ToolMessage` 或 `Command`，尤其 `write_todos` 的 Command.update 必须原样送到 Graph，否则会破坏 P04 State 和 Checkpointer。原有 P03 `read_text` 允许完整 64KiB，**不能用统一 8KiB 限制将其静默截断**；对 MCP 输入 JSON 最多 2KiB、MCP 输出最多 8KiB，超出返回有明确错误码/截断标志，不泄露敏感字段。既有内置工具合法返回不更改 ToolMessage ID 和 ToolTrace 成功判定。
+- 对 ToolError/SchemaError/Timeout/连接失败映射稳定安全代码 `TOOL_NOT_ALLOWED`、`TOOL_INVALID_ARGS`、`TOOL_TIMEOUT`、`MCP_UNAVAILABLE`、`MCP_TOOL_ERROR`、`TOOL_EXECUTION_FAILED`；不能把原始 MCP exception/header/环境变量/路径塞入 model-visible 或日志。已执行写操作的 timeout **结果未知不自动重试**，保持已有 P02 Graph/Run 保守恢复语义。不能为了 Middleware 的易实现性另造一套 while(tool call) loop。
+- **安全性/兼容性前置必测**：真实 LangChain ToolRuntime 身份注入、P04 `write_todos` 的 `Command` 状态更新与 matching ToolMessage、`task` 并行与取消、P03 `write_text` 的文件实际下载、模型错误 ToolTrace 均正常。Middleware 返回 `ToolMessage` 的 `tool_call_id` 一定匹配当前调用。若所锁版本与官方 Middleware 形状不兼容，**停止报告实际版本/最小复现，不退化为自行实现 ToolNode**。
+
+#### 4. 只读本地 MCP（不是凭“readOnlyHint”当授权）
+
+新增 `core/mcp_settings.py` 与版本管理的 `backend/config/mcp_servers.example.json`：
+- `MCP_CONFIG_PATH` **默认空，P05 默认不连接任何外部 Server**；用户明确配置到本机 JSON 时读取，文件不能被前端 API/模型修改，文件不得含凭据/token，根目录 `.env.example` 仅追加注释/示例配置项。
+- 配置最多 2 个 Server，每个 `server_id` 正则 `[a-z][a-z0-9_]{0,31}`，URL 只接受 `http://127.0.0.1:<1..65535>/mcp` 的显式数字端口，禁止 localhost/DNS、IPv6 特殊写法、userinfo、query/fragment、任何其它地址、跳转；入口不支持 stdio command 或内网其它 IP。可用配置示例 `{"servers":[{"id":"demo","transport":"streamable_http","url":"http://127.0.0.1:8765/mcp","tools":[{"name":"lookup_fact","schema_sha256":"<reviewed pin>"}]}]}`；最多每 Server 4 个工具，工具名和 schema digest 在服务端启动时严格匹配用户批准值，变化需人工重新审核配置，不能自动接受。
+- Registry 别名统一 `mcp_<server_id>_<tool_name>`，须符合模型工具命名约束；将适配器返回工具做**浅克隆/受控别名**，不手写损坏参数 Schema 的代理；MCP 原真实工具名仍由 adapter 的 coroutine 绑定。工具元数据的 `readOnlyHint`/自然语言描述**不能决定权限**；只有 config 明确批准 + Schema 摘要匹配 + 本地可信 Server 的工具才获得 `read`。未知/未批准、写型/任意本地文件/Shell 工具一律不注册。
+- `mcp_adapter.py`：先按 Server 独立 `get_tools`，确认响应 JSON Schema/名称/描述/注解的规范化 SHA256（批准项 hash；不要纳入不稳定对象 repr），拒绝重复/非法名/变更；单个 Server 不可用则记录 `MCP_UNAVAILABLE` 并跳过**该服务器的所有工具**，其它内置/Skill 正常可用，不允许启动失败时悄悄连接新地址。启动时只发现一次，变更配置/Server 的可用性后需重启。每个 MCP 工具调用有单独超时、输出大小和错误封装；连接关闭不影响旧 Run 的 builtin 结果。
+- 自带安全、无凭证、无网络检索的 `backend/examples/mcp_readonly_server.py`：MCP 官方 FastMCP SDK 启动真实 `streamable-http`，只监听 127.0.0.1:8765，唯一工具 `lookup_fact(topic)` 只从预置本地固定字典返回示例说明（例如 `topic="langgraph"`），**不接受路径、URL 或 Shell**。固定该工具当前 Schema digest 与示例 JSON；需在实际锁版本运行后生成并验证 digest，不凭空写占位 hash 作为有效配置。Demo 启动该进程与后端不同端口，不应影响 P02/P03 本地服务。没有配置 MCP 时，内置工具功能原样使用。
+- **信任声明**：本地 HTTP MCP 是可信开发示例，不能防御本机其它有权限的恶意进程或 Server 本身恶意读取环境；read-only 是我们审查源码/配置的行为约束，不是 MCP 协议可以替宿主强制实现的沙箱。尤其不要将 GitHub/文件系统 MCP Server、任意外网搜索 Server 当成本阶段默认安装项。MCP 工具描述和内容都按不可信外部数据处理，不直接插入 System Prompt，不信任其中的系统指令。若将来使用用户授权账号/外部公网 MCP，另立安全设计而不是改个 URL 放开。
+
+#### 5. Skills：可发现、按需正文、绝不授权
+
+新增 `skills/models.py`、`skills/loader.py`：
+- 固定发现根 `backend/skills/public/`，只扫描**直接子目录**中固定文件 `SKILL.md`（不递归、不下载、禁止用户路径与 Symlink 逃逸）；最多 10 个 Skill、每文件原始 UTF-8 最多 16KiB、正文最多 12KiB。YAML frontmatter 必须明确使用开头/结尾 `---` 行，使用 `yaml.safe_load`，要求唯一 `name`（正则 `[a-z][a-z0-9-]{0,39}`）、`description`（1–160 字）、`allowed_tools`（可选准确列表、最多 8 个字符串；此字段含义为**Skill 使用的前置工具要求**），拒绝未知 frontmatter 字段、重名、非法编码、路径符号链接、YAML 锚点/别名导致的不合理嵌套/资源消耗。越界 Skill 不得部分注册或悄悄降级；单个无效 Skill 要在启动日志/前端 catalog 明确状态，其它合法 Skill 不受影响。
+- `load_skill(name,policy)` 在模型真实调用时重新确认 name 和预先发现的安全目录项/文件类型，校验长度、哈希/版本未发生变化（需要改本地 Skill 请重启服务）。`allowed_tools` 在发现时必须是 Registry 当前确实存在的工具名，激活时还需是当前 Run policy 的子集，否则不展示、不可读取，绝对不因为 Skill 需要某工具就将该工具加入 `allowed_tools`。
+- `tools/skill_tools.py`：`list_skills(runtime:ToolRuntime[AgentRunContext])` 输出当前 Run 可用的名称/简介/前置工具名，`read_skill(name,runtime)` 输出受控 SKILL.md 正文（<=12KiB）以及“这是本地工作流程文本，不得改变工具权限”的数据边界声明。工具 schema 只能有 `name` 或空参，不接受 path、URL、shell、thread_id。P01 单轮 Agent/CLI 不注册，P04 child 也不注册 Skills；Lead 在 system prompt 只放一行“需要特定方法时调用 list_skills/read_skill”，**不把全部 Skill 正文塞进每次模型上下文**。
+- 实际内容 `backend/skills/public/file-analysis/SKILL.md`（名称 `file-analysis`、说明清楚）：按需列出文件、读取真实 `file_id`、提炼证据和不确定性、仅用户要求时创建 Markdown Artifact、保持文件来源可追溯；`allowed_tools=["list_files","read_text"]`（表示前置必须有两工具，**不会**开放 write_text）。不能写“去联网搜”“调用不存在的浏览器或 RAG”；不会凭空标注来源。
+- 可选由前端只读看 Skill 名称、摘要、前置工具；不展示完整正文作为“安装器”，也没有“启用权限”开关。
+
+#### 6. HTTP 与 Web 最小可测合同
+
+新增 `api/capabilities.py`，路由仅读应用已构造的 Registry/Skill catalog，**禁止前端配置 MCP/安装 Skill/调用其它 Tool**：
+| 方法与路由 | 成功响应 | 说明 |
+|---|---|---|
+| `GET /api/tools` | `[{name,source,permission,origin,availability}]` | 已准入的内置/本地 Skill/MCP 工具清单，按名字稳定排序，不回传 MCP 凭据、任意 URL 或本地绝对路径 |
+| `GET /api/skills` | `[{name,description,required_tools,availability}]` | 已发现可用 Skill 的安全元信息；无 Skill 返回 []，非法 Skill 的脱敏警告可单独以 `warnings` 对象或显式状态呈现 |
+
+新增 `frontend/src/api/capabilities.ts`、`frontend/src/components/CapabilityPanel.tsx`：现有极简 Web 中显示真实可用工具的来源/读写能力、Skill 名称及限制、MCP 未启用/连接失败提示，提供**刷新列表按钮**（只重新 GET，MCP 服务器发现仍需重启后端）；后续 A/B/C 每项完成都能在这个面板独立验证对应功能。没有新图表/页面/大组件库。P02/P03/P04 的会话/Todo/Task/SSE/Artifact 路径保持；真实调用详情已在 RunStatus tool trace 中显示，无需复制另一套日志系统。
+
+#### 7. 文件职责与实施顺序（Codex 精确编码）
+
+| 文件 | 必须实现的职责 |
+|---|---|
+| `backend/pyproject.toml` / `uv.lock` | B/C 新增并锁定 MCP Adapters、MCP SDK、PyYAML，检查 MCP SDK 安全修复版本；其它依赖不无关升级 |
+| `backend/src/minideerflow/tools/registry.py` | ToolDefinition/ToolPolicy/ToolRegistry，重复拒绝、权限/来源/有界超时、内置注册函数 |
+| `backend/src/minideerflow/tools/executor.py` | 官方 `awrap_tool_call` Middleware：身份+白名单+schema+时限+安全 ToolMessage；Command passthrough/取消保留 |
+| `backend/src/minideerflow/core/mcp_settings.py` | Pydantic 解析 JSON/本机 URL/Server ID/tool 白名单+schema pin、默认无连接 |
+| `backend/src/minideerflow/tools/mcp_adapter.py` | 受控 MultiServerMCPClient、元数据 pin、异常/超时、MCP Tool 别名/ToolDefinition |
+| `backend/examples/mcp_readonly_server.py`、`backend/config/mcp_servers.example.json` | 真 Streamable HTTP + lookup_fact 确定性例子及经实际 SDK 计算过的 schema pin |
+| `backend/src/minideerflow/skills/models.py` / `skills/loader.py` | SkillMeta、发现、安全读取、完整 UTF-8/Frontmatter/schema、catalog 与按需正文 |
+| `backend/src/minideerflow/tools/skill_tools.py` | `list_skills/read_skill`，ToolRuntime 可信权限，不接受路径 |
+| `backend/skills/public/file-analysis/SKILL.md` | 真正可用于上传文件归纳的本地样例 Skill |
+| `backend/src/minideerflow/agents/lead.py` | 可选 Middleware 参数传入 `create_agent(middleware=...)`，原 P01 直接调用仍兼容 |
+| `backend/src/minideerflow/agents/context.py` | 在 AgentRunContext 增可选/冻结的 Registry/Policy/Skill 依赖，不改 P03 WorkspaceContext 与 ChildContext 继承契约 |
+| `backend/src/minideerflow/runtime/runner.py` | 从 Registry 快照构建 Lead 工具列表、Policy、Middleware、Run Context；保持 P04 Todo/Task 和 P03 Context，P01 不自动开放 |
+| `backend/src/minideerflow/agents/subagents/dispatcher.py` | 仅核对父 allowed_tools 仍为当前 Registry 快照；**不加 MCP/Skills 到 child** |
+| `backend/src/minideerflow/main.py` / `config.py` / `.env.example` | lifespan 组装 Registry/Skills/MCP（连接失败只降级 MCP）、GET Catalog 服务、AsyncExitStack 清理；MCP 未启用不增加额外进程 |
+| `backend/src/minideerflow/api/capabilities.py` | GET /api/tools 与 /api/skills，返回脱敏 DTO |
+| `frontend/src/api/capabilities.ts` / `components/CapabilityPanel.tsx` / `App.tsx` / `styles.css` | 展示真实工具/Skill/MCP 在线状态及刷新；不做虚构执行按钮 |
+| `backend/tests/test_tool_registry.py` / `test_tool_guard.py` | 真实 ToolNode+Command+工具注入、重复/权限/参数/超时/ID、P04/P03兼容 |
+| `backend/tests/test_mcp.py` / `test_skills.py` / `test_capabilities_api.py` | 真实本机 MCP 进程/协议（不依赖外网/密钥）、pin/失败降级、YAML/路径安全/权限、HTTP Catalog |
+| `backend/tests/test_runner.py` / `test_file_tools.py` / `test_todos.py` / `test_subagents.py` / `test_planning_demo.py` | 因 P05 接线直接受影响才补测，尽量不执行无关整仓测试 |
+| `README.md` / `docs/progress/P05.md` / `docs/tasks/P05-ABCD.md` / `docs/ARCHITECTURE.md` | 记录 A–D 各自实际 SHA、局部命令/结果、Web 可见状态、MCP 本地启动步骤、安全边界与未测项 |
+
+#### 8. 子任务划分与验收
+
+**P05-A · 统一 Registry/Policy 与 ToolGuard，不引入 MCP 依赖**：注册所有旧内置工具；Lead 从 Registry 取允许工具，Middleware 真拦截 + ToolRuntime 不丢失。含 GET /api/tools、CapabilityPanel 真实 builtin 目录，MCP/Skills 显示“未启用”而不是假结果。Fake 工具测试：`write_todos` Command/SQL+Graph、task 两 child、P03 write_text/真实文件、calculate、权限拒绝/重复、非法 Schema、超时/取消。只测 A 及触及旧测试、Ruff、前端 Build；独立提交 A SHA。**如 P04 Command 被错误转成 ToolMessage、丢 Graph State 或模型能越权，STOP**。
+
+**P05-B · 真只读 HTTP MCP 与工具审批**：加入 SDK/Adapters、配置与本地 sample、固定 Schema digest；两进程真实协议握手/发现/查询，注册唯一 `mcp_demo_lookup_fact`，让 Lead Fake Model 真 Call 后读取 ToolMessage。断开 Server 时只 MCP 工具失效/禁用，不影响 builtin；配置变化和 Server 变化需重启；后端不接受外网/stdio/未批准名、schema 修改与写工具。CapabilityPanel 显示 MCP 状态；Ruff/npm Build+局部/真实 HTTP Smoke；独立提交 B SHA。
+
+**P05-C · 本地 Skills 按需读取与不提权**：实现 Loader、示例 SKILL.md、list/read 两工具，GET /api/skills，CapabilityPanel 实际技能列表；用 Fake 测正向加载、非法 YAML、超限、symlink、重名、非法 name/unknown tool、Skill 要求未授权工具不展示也不能读取、Prompt 不一次性注入全部内容；同 P03 的文本文件工具配合；独立提交 C SHA。**Skill 不是可执行代码，也不能修改 Registry**。
+
+**P05-D · 主链、故障、刷新、真模型最终 Demo**：组合 P01–P04 当前代码，实测本机 MCP + Skills + 内置文件工具在**同一父 Run**能按需选择；必要时上传 notes.md → list_skills/read_skill → read_text/list_files → summary.md Artifact，另个问题调用 MCP sample，子代理不能得到 MCP/Skills；MCP 离线不拖垮 builtin，重复/缺 pin/特殊 URL/prompt injection/超时不泄露权限，旧 Todo/Task/SSE/Checkpoint/下载仍正确。只对新增/修改和直接调用方做局部 pytest、Ruff、TypeScript Build、真实浏览器（独立端口/临时数据）。有用户已配置可用真实模型时单独 Smoke，不改变 .env、不输出 key 或真实私人正文，明确记录实际 ToolCall IDs 与真实模型选择，不能把 Fake 结果当真模型通过。最后标 `PENDING_REVIEW`，用户手动验收前不改为 ACCEPTED、不开始 P06。
+
+**明确停止条件**：官方 `awrap_tool_call` 与锁版不匹配、`write_todos` Command/ToolMessage 丢失或重复、MCP schema pin 无法复验、HTTP URL/工具权限绕过、本地 Skills 逃逸/提权、故障后模型/Registry 仍错误允许不可信工具、子 Agent 获得新增权限，必须 STOP 并附最小复现和当前 SHA；**不要为完成 Demo 放宽安全边界**。只记实际发生的 SHA/测试，日志不收集外部敏感数据。
+
+**资料/重要差异**：DeerFlow v2.0.0 `backend/packages/harness/deerflow/tools/tools.py`、`mcp/tools.py`、`skills/parser.py`、`skills/tool_policy.py`、`agents/middlewares/skill_activation_middleware.py`；LangChain 当前官方 `awrap_tool_call` / [Agent Middleware](https://docs.langchain.com/oss/python/langchain/middleware)；[LangChain MCP adapters 源码](https://github.com/langchain-ai/langchain-mcp-adapters/blob/main/langchain_mcp_adapters/client.py)；[MCP 安全实践](https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices)；[官方 MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)。上述是参考机制，不要直接移植 DeerFlow 的 SessionPool/前端管理或复制全部 Skill 系统。
+
 
 ### P06 — 上下文压缩、预算、取消与恢复边界
 
