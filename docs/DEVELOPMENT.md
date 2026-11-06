@@ -2,8 +2,8 @@
 
 > **代码可读性规范**：所有阶段代码同时遵循仓库根目录 [AGENTS.md](../AGENTS.md)：中文关键注释、较长逻辑按 1/2/3 分段、注释重点解释机制与边界，保持既定 API 和业务逻辑不变。每次 Codex 任务必须执行代码可读性自查。
 
-**方案版本**：v1.6 · 2026-11-05  
-**当前状态**：P00 代码已在 main；P01 方案已细化（PLAN_READY）、待本地编码。各阶段真实进度独立记录在 `docs/progress/Pxx.md`，本文件只维护计划与执行规则。  
+**方案版本**：v1.7 · 2026-11-06  
+**当前状态**：P00 代码已在 main；P01 实现在 `feat/p01-single-agent-web` 开发分支、待用户最终验收；P02 详细方案已批准并写入 `feat/p02-runtime-web`，仅设计就绪（PLAN_READY），尚未编码。各阶段真实进度独立记录在 `docs/progress/Pxx.md`，本文件只维护计划与执行规则。  
 **原则**：从零构建 Mini DeerFlow，逐步增加能力。**每个阶段在实际开始之前，必须根据当时真实代码和上游实现重新形成当前阶段的具体实施方案，先交用户审核，再交 Codex 编码。** 一个阶段可以拆成多个小任务，Codex 每次只执行一个，完成后等待用户审核，不自动进入下一阶段。
 
 ## 0. 阶段设计先行：每次只最终确定当前阶段
@@ -438,33 +438,169 @@ CLI ---------------------> AgentService.run_agent_once (same path as HTTP)
 
 **Git 操作**：从更新后的 main fast-forward 拉取，检查未提交工作后建/复用 `feat/p01-single-agent-web`；Codex 依 A→B→C 顺序实施并保持每个任务的前端与后端同步、分别做小提交，最后推送该分支（失败如实报错），记录 SHA/局部测试。不要 reset/clean/force push，不覆盖用户在本地的变更。阶段结束标记 PENDING_REVIEW，等待用户基于 Demo 进行审核；未获批准不进入 P02。
 
-### P02 — Thread / Run / SQLite Checkpoint / SSE / 极简 Web
+### P02 — Thread / Run / SQLite Checkpoint / SSE / 极简 Web（2026-11-06 正式实施合同）
 
-**业务链**：浏览器创建 Thread → POST Run 获取 run_id → 后端在受管任务中运行 `lead_agent.astream` → 发布 SSE token/tool/status → SQLite 持久化图历史及 Run 终态 → 浏览器查看对话。**API 不能直接在 HTTP 请求内等待整个长任务结束。**
+**状态：PLAN_READY（用户已要求将详细设计落到 GitHub；仅完成设计，不表示代码完成）。** 以 `feat/p01-single-agent-web` 的实际代码及中文注释整理为基线。原 P02 三段概述以此四任务 A/B/C/D 细化合同为准；P03–P09 规划保持不变。不得以 P01 的 `PENDING_REVIEW` 冒充验收通过；执行 P02 前先同步并核验 P01 最新代码。
 
-| 新增/修改文件 | 编码必须完成的具体内容 |
-| --- | --- |
-| `runtime/models.py` | Pydantic `ThreadDto`、`RunDto`、`RunStatus`、`EventEnvelope`；明确 CREATED/RUNNING/SUCCEEDED/FAILED/CANCELLED 状态；ID 为 UUID。 |
-| `runtime/db.py` | SQLite 数据源初始化及关闭（`aiosqlite` 或等价，应用 lifespan 托管）；建 `threads` / `runs` 最小表，独立于 Checkpointer。SQLite 写入序列化，避免并发事务锁冲突。 |
-| `runtime/repository.py` | `create_thread/list_threads/get_thread/create_run/get_run/transition_run`；终态不能重新 RUNNING，同一 Thread 不能有两个运行中的 Run。用 SQLite 事务保证检查/写入在同一并发边界。 |
-| `runtime/checkpoints.py` | 单独创建、关闭 `AsyncSqliteSaver`（来自经验证的 `langgraph-checkpoint-sqlite`），以 `thread_id` 配置 `configurable`，把 saver 注入 P01 Agent 工厂；启动/关闭绑定 FastAPI lifespan。 |
-| `runtime/events.py` | `EventBus.publish(run_id,event)` 和 `subscribe(run_id)`；Run 内事件序号递增，用有界内存环形缓冲区解决 POST Run 之后才连接 SSE 导致的初始事件丢失；不承诺持久历史回放。消费者慢时有明确 buffer/丢失策略。 |
-| `runtime/runner.py` | `start_run(thread_id, text)` 创建 Run、管理后台 asyncio Task，使用 `agent.astream` 归一化消息/工具事件；在 `try/except/finally` 中准确写入终态并发布对应事件，模型说“完成了”不能当作 SUCCEEDED。 |
-| `api/threads.py` | `POST /api/threads`、`GET /api/threads`；只调用 repository，不导入图或模型逻辑。 |
-| `api/runs.py` | `POST /api/threads/{thread_id}/runs` 返回 run_id；`GET /api/runs/{run_id}` 查询服务端状态；`GET /api/runs/{run_id}/events` 使用 `text/event-stream` SSE。 |
-| `main.py` | 保留 P00 /health，在 lifespan 中创建/关闭 Runner、SQLite、Checkpointer、事件服务并 include_router；默认只在 localhost、单 worker。 |
-| `frontend/package.json`、`frontend/src/main.tsx` | 使用 Vite + React + TypeScript 建最小 Web 入口；不引入 Next.js、Redux、复杂 UI 设计系统。 |
-| `frontend/src/api/client.ts` | `createThread/startRun/getRun`，`subscribeRunEvents` 统一封装 HTTP/SSE 处理（POST 和 GET 为两个请求）。 |
-| `frontend/src/App.tsx` | 最小聊天输入/消息列表/等待状态；按实际 RunEvent 更新流式显示，最终以 `GET /api/runs/{id}` 为状态权威。 |
-| `tests/test_runtime.py`、`tests/test_runs_api.py` | Thread/Run 状态迁移、互斥、Graph Checkpoint 读写、SSE 事件顺序、Agent 失败不报成功；Mock 模型运行即可。 |
+#### P02-1. 用户可见结果、边界及现状
 
-**确定性 API**：`POST /api/threads` 返回 `thread_id`；`POST /api/threads/{id}/runs` 接收 `{"message":"..."}` 返回 `{"run_id":"...","status":"CREATED"}` 或真实的初始状态；`GET /api/runs/{id}` 返回明确终态；SSE 每条有 `event_id,run_id,thread_id,type,timestamp,payload,task_id?`。事件不等于数据库交易记录，重连只能在**本次 Run 的保留窗口**回看；超出窗口时要求用户重新拉取 Run 状态，不得无条件承诺无损回放。
+**主业务链**：在已有 React 测试台创建/选择 Thread → 提交文本获得 `run_id`（HTTP 202，不等待模型完成）→ 单进程后台 Runner 使用相同 `thread_id` 执行 P01 Agent → LangGraph SQLite Checkpointer 保存多轮 Graph 消息 → 业务 SQLite 保存 Run 输入、状态、最终回答及实际工具轨迹 → SSE 实时传 Token/工具状态/终态 → 页面可切换会话、刷新恢复已完成历史、显示服务端真实状态。
 
-**实现次序**：P02-A Repository/Checkpointer → P02-B Runner/API/SSE → P02-C 前端薄聊天界面。若模型执行需要持久化长 Run，P02 先单进程托管任务，不引入 Redis/MQ。P06 再完善 Cancel 和崩溃后核查。
+**P01 已有**：`config.py` / 根目录 `.env`、`core/model.py`（`ChatOpenAI`）、`agents/lead.py`（`create_agent`）、`agents/service.py`（`run_agent_once`、ToolMessage 校验）、`tools/calculator.py`、`api/demo.py`、`main.py`、React/Vite `frontend/src/App.tsx` 和 `api.ts`；P01 真实普通问答与计算工具在 `AgentService` 层有验证记录，最新中文注释/格式未单独运行本地测试。P01 `/health`、`/api/demo/calculate`、`/api/demo/agent`、CLI 都必须保留。
 
-**局部验收**：创建 Thread、Run、流式事件到终态；服务重启能读回历史 Checkpoint；事件不漏发订阅前的开始事件；同 Thread Run 冲突被拒绝；错误 Run 不显示完成。只测 `tests/test_runtime.py`、`tests/test_runs_api.py` 和当前 Web API 消费逻辑。
+**本期只做**：Thread / Run、Graph 历史、异步任务、有限流式事件、有限重连、简易 Web 会话 UI、服务重启时保守孤儿核查。**不做**：多用户鉴权/公网暴露、Todo/Sub-Agent、MCP/Skills、Workspace、文件上传、RAG、Redis/MQ、跨进程运行、完整 Run 取消和中断点精准恢复、永久 SSE 事件归档。P01 计算器仍是唯一 Agent Tool。所有服务器默认 `127.0.0.1`、仅一个 Uvicorn Worker、无 `--reload`。
 
-**DeerFlow 参考**：`runtime/runs/manager.py`、`runtime/runs/worker.py`、`runtime/checkpointer/async_provider.py`、`app/gateway/routers/runs.py`（路径根据架构文档里的上游根目录定位）。
+**上游已经核对**：`bytedance/deer-flow` 标签 `v2.0.0` 中：
+- `backend/packages/harness/deerflow/runtime/runs/manager.py`：参考 `create_or_reject`、`set_status`、`reconcile_orphaned_inflight_runs` 的职责分离；不复制复杂调度或存储重试框架。
+- `backend/packages/harness/deerflow/runtime/runs/worker.py`：参考 `run_agent` 中 Graph 流式事件和 Run 终态顺序；不复制完整 Gateway 协议。
+- `backend/packages/harness/deerflow/runtime/checkpointer/async_provider.py`：参考异步上下文管理器与关闭顺序；本项目直接用官方 `langgraph.checkpoint.sqlite.aio.AsyncSqliteSaver`。
+- 官方参考：[LangGraph StreamMode](https://reference.langchain.com/python/langgraph/types/StreamMode)、[SQLite AsyncSqliteSaver](https://reference.langchain.com/python/langgraph.checkpoint.sqlite/aio/AsyncSqliteSaver)、[LangChain create_agent](https://reference.langchain.com/python/langchain/agents/factory/create_agent)。`messages` 为模型 Token + metadata，`updates` 为节点实际更新，二者语义不相同。具体签名以本地锁定的兼容版本实测为准。
+
+#### P02-2. 固定数据模型、SQLite 架构与并发
+
+两份独立文件位于 `backend/data/`（Git 忽略）：`runtime.sqlite3` 保存业务记录；`checkpoints.sqlite3` 交给 LangGraph 官方 Saver。可通过 Settings 指定路径，自动创建父目录；绝不提交本地 DB。`runtime` 写入使用单一 `aiosqlite` 连接和 `asyncio.Lock` 串行化写事务；启用 `PRAGMA foreign_keys=ON`、`journal_mode=WAL`、`busy_timeout=5000`。关键「检查 + 插入/更新」在 `BEGIN IMMEDIATE` 事务内完成并正确提交/回滚；只靠 Python 内存锁不足以保护表约束。
+
+`threads`：
+| 列 | 类型 | 约束 |
+|---|---|---|
+| `id` | TEXT | PK、UUID 字符串 |
+| `title` | TEXT | 默认「新会话」，非空，最多 100 字 |
+| `needs_recovery` | INTEGER | NOT NULL DEFAULT 0，仅保守阻止不确定会话继续 |
+| `created_at` / `updated_at` | TEXT | UTC ISO8601，非空 |
+
+`runs`：
+| 列 | 类型 | 约束 |
+|---|---|---|
+| `id` | TEXT | PK、UUID |
+| `thread_id` | TEXT | NOT NULL，外键 `threads(id)` |
+| `input_message` | TEXT | NOT NULL，1–2000 字 |
+| `status` | TEXT | NOT NULL，`CREATED/RUNNING/SUCCEEDED/FAILED/CANCELLED` |
+| `answer` | TEXT | 成功时最终有效答复，否则 NULL |
+| `tool_trace_json` | TEXT | 当次真实工具结果，默认 `[]`；不放凭据/原始 Provider 报文 |
+| `error_code` | TEXT | NULL 或稳定脱敏错误码 |
+| `created_at` / `started_at` / `finished_at` | TEXT | UTC ISO8601，后两者可空 |
+
+至少建 `runs(thread_id,created_at,id)` 索引与部分唯一索引：
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS ux_runs_one_active_per_thread
+ON runs(thread_id)
+WHERE status IN ('CREATED', 'RUNNING');
+```
+
+**固定状态转换**：`CREATED -> RUNNING -> SUCCEEDED/FAILED`；排队/启动异常时允许 `CREATED -> FAILED`；`CANCELLED` 仅预留终态，不暴露用户取消接口（P06 实现）；终态不能转回 RUNNING，也不可二次终结。只有服务端成功保存终态后才能发布 `run_end`。Graph 或工具文字声称“完成”不是成功依据。`run_id` 是单次执行，不等同 `thread_id`；`tool_call_id` 归实际工具消息管理。
+
+**保守恢复**：启动检查遗留 `CREATED/RUNNING`，更新为 `FAILED/RUN_INTERRUPTED`，标记受影响 Thread 的 `needs_recovery=1`；正常执行进入 Graph 后出错/超时且可能留下部分 Checkpoint，也标记该 Thread 需恢复。此类 Thread 的新 Run 返回 409 `THREAD_REQUIRES_RECOVERY`，不自动重放或复用有缺口的历史；前端允许查看并提示“新建会话继续”。不提供恢复标志的手动清除 API。一个正常完成的 Thread 允许继续多轮对话。P06 再设计可靠恢复。
+
+**检查点**：`AsyncSqliteSaver.from_conn_string(path)` 使用 `async with` 在 FastAPI lifespan 中管理，注入 `build_lead_agent(model,tools,checkpointer=...)`，Graph 调用 `config={"configurable":{"thread_id":thread_id},"recursion_limit":12}`。同一 Thread 串行，新的 HumanMessage 自动参与已有 Graph 消息；不用 Run 表模拟消息记忆。Saver 的表由库按需初始化，不直接改内部 schema；按已锁定库版本确认安全反序列化配置（官方建议 `LANGGRAPH_STRICT_MSGPACK=true` 或明确 allowlist），不读取不可信外部 SQLite 文件。正式验证包括释放连接后重新打开仍能读取相同 Thread 的消息。
+
+**最终一致性顺序**：① 事务创建 Run 并做单 Thread 互斥 → ② 后台进入 RUNNING → ③ 流式执行且 Checkpoint 由框架写入 → ④ 验证最终 AIMessage 和工具回执，事务保存 Run 成功/失败 → ⑤ 发布终态 SSE。两份 SQLite **没有跨库原子事务**；异常/崩溃时以保守 FAILED + 恢复标志处理，绝不能宣称 Exactly-Once。
+
+**本地执行容量**：固定最多 2 个并行 Agent Run、8 个 CREATED 排队 Run。Runner 在应用生命周期中持有 2 个 worker Task，`asyncio.Queue(maxsize=8)` 缓冲队列；同 Thread 活动 Run 始终唯一。提交端在 Run 创建前的统一准入临界区检查队列容量，满时返回 429 `RUN_QUEUE_FULL` 且不得留下孤立 CREATED。后台 worker 顺序从队列领取、把 CREATED 更新 RUNNING。P02 无动态优先级、分布式队列或数据库任务调度器。
+
+#### P02-3. API 与响应合同（Codex 不自行改名）
+
+| 方法与路径 | 请求 | 成功响应 / 语义 |
+|---|---|---|
+| `POST /api/threads` | `{"title":"可选标题"}`，可为空对象 | HTTP 201，`ThreadDto`（含 `id/title/created_at/updated_at/needs_recovery`） |
+| `GET /api/threads` | 无 | HTTP 200，`ThreadDto[]`；按 `updated_at DESC,id DESC` |
+| `GET /api/threads/{thread_id}/runs?limit=50` | limit 默认 50、最大 100 | HTTP 200，`RunDto[]`；截取最近 N 条后按时间正序显示 |
+| `POST /api/threads/{thread_id}/runs` | `{"message":"..."}` | HTTP 202，`{"run_id":"UUID","thread_id":"UUID","status":"CREATED"}`，仅代表已接收 |
+| `GET /api/runs/{run_id}` | 无 | HTTP 200，`RunDto`：`id/thread_id/input_message/status/answer/tool_calls/error_code/created_at/started_at/finished_at` |
+| `GET /api/runs/{run_id}/events` | 浏览器 SSE，可带 `Last-Event-ID` | HTTP 200 `text/event-stream`；Run 不存在 404、失去保留窗口 410 |
+
+共享错误响应：`{"detail":{"code":"...","message":"脱敏短消息"}}`。404 `THREAD_NOT_FOUND/RUN_NOT_FOUND`；409 `THREAD_BUSY/THREAD_REQUIRES_RECOVERY`；422 Pydantic 输入校验（空/超 2000 字必须拒绝，命名 `INVALID_MESSAGE` 的自定义错误可由边界适配）；503 `MODEL_NOT_CONFIGURED`；429 `RUN_QUEUE_FULL`；SSE 不可回放 410 `EVENT_STREAM_EXPIRED`。运行后发生的 Timeout/Provider 错误不再改变已经返回的 HTTP 202，而是更新 `FAILED` 与 SSE 错误事件。模型缺配置属于启动 Run 的前置校验：在建 Run 前立即返回 503，不残留 CREATED。API 不暴露内部堆栈、认证头、密钥。
+
+**历史记录**：仅成功返回的 `answer` 是确认的最终回答；失败 Run 仍保留输入、状态、错误码，页面不得拼造回答。`tool_calls` 由真实匹配的 `AIMessage.tool_calls` 与 `ToolMessage.tool_call_id` 构造，沿用 P01 的 `ToolTrace` 语义，失败工具 `ok=false`。不要把 SSE 中间 Token 保存成“已完成回答”。
+
+#### P02-4. SSE / 事件一致性合同
+
+统一 `RunEvent`：`event_id`、`run_id`、`thread_id`、`type`、`timestamp`、`payload`，未来子任务可选 `task_id`。`event_id` 格式 `<run_id>:<递增整数>`，同一 Run 内单调递增，发布时分配；在 SSE 中使用 `id:`、`event:`、`data:`（data 是 JSON 的完整 RunEvent）。事件类型：
+- `run_start`：RUNNING 已成功入库。
+- `assistant_delta`：来自 Graph `messages` 流的真实模型文本增量，带 `message_id` 与 `text`；注意工具调用前的消息不一定是最终答复。
+- `tool_start`：实际 Graph `updates` 中 AIMessage 的有效 `tool_calls`，带 `tool_call_id/name/args`。
+- `tool_end`：对应真实 ToolMessage，按调用 ID 配对，携带 `name/result/ok`；未匹配的回执应视为执行错误。
+- `assistant_final`：Graph 结束后通过已提交的最终消息验证提取的完整回答，前端用它**覆盖**临时 Token。
+- `error`：仅错误码和安全说明，不透传 Provider 异常。
+- `run_end`：终态已持久化，payload 包含状态；前端随后 `GET /api/runs/{id}` 复核。
+- `stream_gap`：订阅过慢/窗口缺口的提示，前端停止拼接并改查 Run；这是一次性控制通知，不作为永久可回放业务事件。
+
+`graph.astream(...,stream_mode=["messages","updates"])`：`messages` 仅用于模型增量，过滤非模型节点和工具调用 chunk，不把 ToolMessage 当 Token；`updates` 用于工具请求、回执及最终节点更新。流式过程中积累**本轮新增**的工具消息，不把以前 Thread 历史重复作为本轮工具记录；图正常结束后再从最后有效 AIMessage / `aget_state(config)` 复核最终答案与待处理调用 ID。必要时以当前 Run 的已观测 AI/Tool 消息集合明确隔离历史，不能直接对完整历史重新算所有 ToolTrace。去重依靠真实消息 ID/工具调用 ID；不能通过文本猜测工具名称或成功状态。
+
+**EventBus**：按 Run 持有最多 512 条事件的有界 `deque`，最多每个订阅者 64 条待消费通知；事件先进入缓冲再通知订阅者。Run 创建成功后立即创建对应 EventBus 记录，确保 POST Run 返回后才订阅也可以读取 `run_start`。首订阅无 cursor 时回放当前保留缓冲；浏览器重连传 `Last-Event-ID` 时只重放更大的序号（同一个 Run ID），不跨 Run 复用 cursor；SSE 断开不取消后台 Run。慢订阅者溢出或 cursor 早于最早保留序号时发送一次 `stream_gap` 并结束流，绝不阻塞 Runner、也不默默假装连续；缺口控制消息不参与正常递增业务事件回放。终态后事件内存保留 10 分钟，之后清理；Run 已存在但无可回放事件时返回 410，让前端查询 `GET Run`。EventBus 是内存窗口，**不代表持久化历史**。
+
+**终态事件顺序**：`assistant_final` 只有在结果确实有效后发布；`run_end` 永远在业务库终态提交之后发布。服务端持久化失败时不得发布 SUCCEEDED；至少记录安全日志供排查。HTTP SSE 设置 `Cache-Control: no-cache`、`X-Accel-Buffering: no`，客户端断线可重新订阅，历史展示必须以数据库为准。
+
+#### P02-5. 逐文件设计与固定职责
+
+路径除特别注明外均相对 `backend/src/minideerflow/`；只创建当前任务真实使用的包/文件，避免先建空目录。
+
+| 文件 | 类/函数/接口（必须落地） | 边界与错误处理 |
+|---|---|---|
+| `backend/pyproject.toml` + `backend/uv.lock` | 新增 `aiosqlite`、`langgraph-checkpoint-sqlite` 并真实锁版 | `uv sync --locked --group dev`；记录精确版本；保留 P01 既有依赖与模型工厂 |
+| `config.py`（改） | `runtime_db_path`、`checkpoint_db_path`、`run_max_concurrency=2`、`run_queue_size=8` | 默认绝对路径基于 backend 项目，不依赖 cwd；保留 `.env` 与 `SecretStr`、原模型配置 |
+| `runtime/models.py` | `RunStatus(str,Enum)`、`ThreadDto`、`RunDto`、`RunEvent`、`RunAccepted`；`utc_now_iso()` | 序列化字段稳定、UTC 时间、Run 的 `tool_calls` 为 P01 ToolTrace |
+| `runtime/db.py` | `RuntimeDatabase.open(path)`、`init_schema()`、`transaction(...)`、`close()` | 显式事务/锁、连接生命周期、WAL/外键/忙等待；不要让 API 执行 SQL |
+| `runtime/repository.py` | `create_thread(title)`、`list_threads()`、`get_thread(id)`、`list_runs(thread_id,limit)`、`create_run(thread_id,message)`、`get_run(id)`、`transition_run(id,expected,target)`、`complete_run(id,...)`、`reconcile_orphans()` | 原子状态更改、唯一活动 Run 索引、`THREAD_BUSY` /恢复标志、终态不可逆；线程更新时间 |
+| `runtime/checkpoints.py` | `open_checkpointer(path)` 异步上下文管理器，产出 `AsyncSqliteSaver`；`thread_config(thread_id)` | 连接关闭由 lifespan 负责；框架 saver 原生存消息，不手写 Checkpoint SQL |
+| `agents/lead.py`（改） | `build_lead_agent(model,tools,checkpointer=None)` | 保留 P01 Prompt 与工具表，给 `create_agent` 透传 optional saver；P01 无 Checkpointer 路径仍正常 |
+| `agents/service.py`（少量改） | 保留 `run_agent_once`；抽取纯函数 `extract_final_answer(messages)`、`extract_run_tool_traces(messages)`（若共用可降低重复） | 同样的 tool_call_id 校验、安全失败语义；不可因为新 Run 引入第二套 Agent 逻辑 |
+| `runtime/runner.py` | `RunService.start_run(thread_id,message)`、`_worker_loop()`、`_execute_run(run)`、`shutdown()` | 有界 Queue + 2 workers、Task 强引用、配置预检、事务状态变化、异常清理/孤儿修复；202 不等待模型 |
+| `runtime/streaming.py` | `stream_agent(agent,thread_id,input,event_sink)` | 仅转换 Graph chunks，过滤模型 delta、建立当前 Run tool_call_id 映射、返回实际终态答案/轨迹；不写 SQL |
+| `runtime/events.py` | `EventBus.ensure_run(id,thread_id)`、`publish(...)`、`subscribe(id,last_event_id)`、`close_run(id)`、`prune()` | 顺序事件、有界 deque、64 容量订阅、10 分钟保留、断线不取消 Run、缺口显式提示 |
+| `api/threads.py` | 201 创建/200 列表/200 历史 runs，使用 `request.app.state` 的 Repository | Pydantic 校验、统一 404/409；不直接调用模型或 SQLite SQL |
+| `api/runs.py` | 202 新 Run、200 查 Run、SSE 订阅 Run | 读取 `Last-Event-ID`、处理 404/410、发送合法 SSE 帧；仅调 Runner/EventBus |
+| `main.py`（改） | `asynccontextmanager lifespan` 初始化 DB → Saver → Repository reconciliation → EventBus/Runner；退出按 Runner → EventBus → Saver → DB 关闭 | 保留现有 app/health/demo 路由及 PyCharm `__main__` 入口，启动无模型密钥仍可健康检查 |
+| `frontend/src/api/runtime.ts`（新增） | `createThread`、`listThreads`、`listRuns`、`startRun`、`getRun`、`subscribeRunEvents`；统一 TS DTO | 保留 `src/api.ts` 的 P01 计算/健康接口，不把 Key 放进浏览器 |
+| `frontend/src/components/ThreadList.tsx`（新增） | Thread 新建/列表/切换，展示 `needs_recovery` | 显示真实后端数据，不能占位假会话 |
+| `frontend/src/components/ChatPanel.tsx`（新增） | 当前 Thread 运行列表、输入、处理中内容、历史恢复 | 初期按真实 RunDto 恢复；请求中的状态可轮询，SSE 后覆盖为最终答案 |
+| `frontend/src/components/RunStatus.tsx`（新增） | 状态、真实 Tool Trace、错误/恢复提示 | 只凭 GET Run 终态确认成功，不能从助手回答词句推断成功 |
+| `frontend/src/App.tsx`、`styles.css`（改） | 组合两栏 UI、保留 P01 健康/计算器/一次性 Agent 调试区，增加 Thread 工作台 | 简洁 CSS，不引入 Redux/Next.js；响应式最小可用，禁用假完成信息 |
+| `.env.example` / `.gitignore` / `README.md`（按需改） | 数据库配置、运行命令、忽略 `backend/data`、能力导航 | 不覆盖现有 `.env`，不提交真实数据库或密钥 |
+| `docs/progress/P02.md` | A/B/C/D 每次真实变更、命令、局部测试、Git SHA、前端对应能力 | 未运行不得写通过；只有 Demo 验收后 `ACCEPTED` |
+
+**测试文件**：`backend/tests/test_repository.py`、`test_checkpoint.py`、`test_runner.py`、`test_events.py`、`test_runs_api.py`；直接受影响时更新 `test_lead.py`、`test_demo_api.py`、`test_config.py`、`test_health.py`。测试使用临时 SQLite 文件、假模型，不请求真实 Provider、不读取用户本地 `.env`、不创建用户真实数据库。
+
+#### P02-6. 子任务 A/B/C/D（一次仅交给 Codex 一个任务）
+
+**P02-A — SQLite + Checkpointer + Thread 列表**
+1. 前置核验最新 P01 分支/当前工作区、是否已合入、未提交文件；从完整 P01 最新代码创建/复用 `feat/p02-runtime-web`，不得在旧 main 空代码基础上实现。核对 GitHub 文档/本地文件后确定实际工作树。
+2. 实现依赖锁、路径配置、SQLite RuntimeDatabase/Repository、表索引/状态迁移、`AsyncSqliteSaver` 生命周期与 `build_lead_agent` 可选 saver；FastAPI lifespan 挂载资源与 Thread 创建/列表/历史空列表 API。
+3. 前端增加 ThreadList 真实新建与切换；Agent 输入/Run 按钮注明 B 阶段尚未实现，不伪造执行。
+4. 局部测试 `test_repository.py`（正常、404、唯一活跃、不可逆终态、隔离/事务）、`test_checkpoint.py`（同 Thread 保存/重新打开读取、跨 Thread 隔离）、受影响 config/health/lead；`npm run build`，仅真实可用接口的 Smoke。
+5. 本次顺便复验此前 P01 中文注释/格式相关的直接受影响测试与 frontend build；不改 P01 行为，不展开无关重构。记录独立结果和 SHA。**A 未通过，不启动 B。**
+
+**P02-B — 后台 Runner + Run API + 轮询前端**
+1. 实现 `runtime/runner.py`、`runtime/streaming.py` 的基本 Agent 执行与最终结果收集；API 增加创建 Run/查询 Run。准入前检查模型配置，采用 2 workers + 8 等候、每 Thread 唯一活动 Run。`streaming.py` 在 B 阶段可先无 EventBus，仅收集真实执行结果；预留 C 阶段事件回调，不能自己另建事件协议。
+2. 前端使用 B 的 Run 创建/查询 API，以有限轮询显示 CREATED/RUNNING/SUCCEEDED/FAILED，支持当前 Thread 下一轮对话；切换会话时停止旧轮询。
+3. 局部测试 `test_runner.py`、`test_runs_api.py`：202 不等待模型、Thread 冲突 409、队列满 429、无 Key 503 且不建 Run、最终工具轨迹、模型失败/超时、终态不可二次修改、同 Thread 多轮 Graph 状态；`npm run build`。B 不假装已有 SSE。
+4. 每次变更同步前端、README 与 `P02.md`；B 通过后才进入 C。
+
+**P02-C — EventBus + SSE + 实时 Web**
+1. 实现 512 条 Run 缓冲、64 条订阅通知、序号与 Last-Event-ID 校验；在 B 的 Runner 中注入 EventBus，新增 `/events` SSE 路由和模型 token/工具/错误/终态事件。
+2. 前端用 `EventSource` 接收 `assistant_delta`（按 message_id 维护临时片段）、`tool_start/tool_end` 与 `assistant_final`；收到 `run_end` 或 `stream_gap` 时重新 GET Run 并结束当前流；仅本次 Run 可继续；防事件重复、跨 Thread 串台。
+3. 局部测试 `test_events.py`、`test_runs_api.py`（POST 后订阅回放、断线后续跑、Last-Event-ID、丢失窗口、慢订阅不阻塞、成功与失败先入库后发结束）、`test_runner.py` 直接受影响内容、`npm run build`。不承诺完整 SSE 持久化。
+4. B/C 每项前端展示的是确实已实现的功能，禁止演示用模拟结果冒充真实模型。
+
+**P02-D — 重启恢复、真实联调与交付**
+1. 集成历史 Run 读取、已保存消息和失败恢复提示；服务启动对孤儿 CREATED/RUNNING 标记 `FAILED/RUN_INTERRUPTED` 并阻止需恢复的 Thread 继续写。历史仅展示最近 50/最多 100 条 Run；记录边界。
+2. 验证 `/health`、P01 calculator/CLI/demo 保持可用，完成 P02 页面、中文注释与长逻辑 1/2/3 说明，清除与真实行为不一致的注释；不动 P03+ 模块。
+3. 用临时数据库与 Mock 做重启前后同 Thread 历史、不同 Thread 隔离、SSE 缺口回落、失败终态、工具实际调用 ID 的局部测试；如本地真实模型配置可用，再单独做普通两轮问答 + Tool Calling + SSE 真模型 Smoke。没有可用 Key 时记 `REAL_MODEL_SMOKE_BLOCKED`，不能假装通过。
+4. 完整提交 `README.md` 和 `docs/progress/P02.md`：各小任务 SHA、实际执行命令、测试结果、前端功能/截图（有真实证据时）、未验证项。标记 `PENDING_REVIEW`，等待用户体验 Demo。**不自动开始 P03**。
+
+#### P02-7. 成功条件与阻塞边界
+
+必须分别证明：
+- 创建 Thread 后同 Thread 两轮真正共享 Checkpoint，另一个 Thread 不共享；结束服务重新启动后可恢复成功对话的上下文。
+- POST Run 返回 HTTP 202 后后台继续，运行期间 GET Run 看到真实状态；同 Thread 并发 409；排队满 429；缺配置 503 不产生幽灵 Run。
+- 工具 `calculate` 调用的名称、参数、匹配 ID、成功/错误来自实际 ToolMessage；最后回答无效时不得 SUCCEEDED。
+- SSE Token/Tool 事件顺序、POST 后首订阅缓冲、断线不取消、慢客户端显式 gap、终态后 GET Run 权威查询；刷新页面恢复历史。
+- 启动对孤儿 Run 保守标 `FAILED/RUN_INTERRUPTED` 并显示需恢复提示；未实现暂停/无损恢复时不得假称能恢复。
+- P01 健康/计算/一次性 Agent/CLI 保留；新增、修改后端的局部 pytest + Ruff 与前端 TypeScript/build 通过，真实模型和 Mock 的结果分开报告；每任务同步最简 Web 功能。
+- 所有新改 Python/TS/TSX 关键逻辑遵守根目录 `AGENTS.md`：中文解释复杂机制，长流程 `1./2./3.` 分段；接口/模型描述保持现有行为。
+- 只运行当前任务及直接受影响接口测试；不要因为迁移到 P02 就无边界跑 P00–P09 全集。关键行为改变/库冲突/Store API 无法按锁版实现，停止相关编码并提交精确证据给用户审核，Codex 不自行改技术栈。
+
+**Git/停止条件**：设计文档落在 `feat/p02-runtime-web` 分支（从 P01 最新远程实现起）；文档提交不代表 A 代码已实现。后续 Codex 只接受当次 A/B/C/D 子任务，检查未提交本地内容，不 reset/clean/force push。每次任务真实测试并单独提交 SHA；任何推送权限错误如实报告。最终用户审核后才能将 `P02.md` 从 `PENDING_REVIEW` 改为 `ACCEPTED` 并进入 P03。
+
 
 ### P03 — Workspace、文件安全与 Artifact
 
