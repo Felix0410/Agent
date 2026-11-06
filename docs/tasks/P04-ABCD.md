@@ -55,7 +55,7 @@
 |---|---|
 | `runtime/task_registry.py` 新 | per Run Semaphore(3)，同 Run 包括失败不超过4次委派，全部 Task 强引用；超时 `asyncio.timeout(35)`、正常完成/timeout/cancel/异常均收尾并释放；禁止生成无约束后台离线任务 |
 | `agents/subagents/dispatcher.py` | 并发 `dispatch` 互不写父 Graph State；每 child 唯一 Task ID，Task SQL 从 PENDING→RUNNING→终态；父 Run 超时/关闭先确认 child Task 都取消回收 |
-| `runtime/runner.py` / `config.py` | 独立 `run_timeout_seconds=150` 供持久 P04 复杂 Run，P01 单轮45秒保持；父 Runner 终态前 await 清理 child；永久无后台遗留。对 settings 值设上界和测试 |
+| `runtime/runner.py` / `config.py` | 独立 `run_timeout_seconds=150` 供持久 P04 复杂 Run；父 Graph `recursion_limit=36`（节点步数，不是模型调用次数），child Graph 单独 `recursion_limit=14`，P01 单轮45秒/原 Graph 限制保持；父 Runner 终态前 await 清理 child；永久无后台遗留。对 settings 值设上界和测试 |
 | `runtime/events.py` / `api/runs.py` | 不换 EventBus 或 SSE 格式，新增事件仍用原 id 和缓冲。plan_service/dispatcher 只在 SQL 成功后 `publish`，事件发不出不反向伪造业务失败 |
 | `runtime/plan_repository.py` / `main.py` | 启动对遗留 PENDING/RUNNING 子任务标 FAILED/SUBTASK_INTERRUPTED；不能自动重放已可能产生外部副作用的 child |
 | `frontend/src/api/runtime.ts` / `components/TodoPanel.tsx` / `TaskPanel.tsx` / `ChatPanel.tsx` | 注册 todo_updated/subtask_created/started/completed/failed 的 EventSource 自定义事件；同一 Run 快照覆盖，断线/Run结束 GET Run+todos+subtasks；切换清理订阅/历史不丢 |
