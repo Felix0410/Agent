@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from openai import APIError, APITimeoutError
 from pydantic import BaseModel
 
@@ -46,6 +46,54 @@ def validate_message(message: str) -> str:
     return message
 
 
+def extract_run_tool_traces(messages: list[BaseMessage]) -> list[ToolTrace]:
+    """按真实回执顺序配对调用 ID，拒绝重复 ID、未匹配及缺失回执。"""
+    pending = {}
+    seen = set()
+    traces = []
+    for item in messages:
+        if isinstance(item, AIMessage):
+            if item.invalid_tool_calls:
+                raise ValueError("invalid tool call")
+            for call in item.tool_calls:
+                call_id = call.get("id")
+                if not call_id or call_id in seen:
+                    raise ValueError("invalid tool call id")
+                seen.add(call_id)
+                pending[call_id] = call
+        elif isinstance(item, ToolMessage):
+            call = pending.pop(item.tool_call_id, None)
+            if call is None:
+                raise ValueError("unmatched tool result")
+            result = item.content if isinstance(item.content, str) else str(item.content)
+            traces.append(
+                ToolTrace(
+                    name=call["name"],
+                    args=call["args"],
+                    result=result,
+                    ok=item.status != "error" and not result.startswith("ERROR["),
+                )
+            )
+    if pending:
+        raise ValueError("missing tool result")
+    return traces
+
+
+def extract_final_answer(messages: list[BaseMessage]) -> str:
+    """最终答案必须来自本轮最后一条无工具请求的有效 AIMessage。"""
+    if not messages:
+        raise ValueError("no final answer")
+    final = messages[-1]
+    if (
+        not isinstance(final, AIMessage)
+        or final.tool_calls
+        or final.invalid_tool_calls
+        or not final.text.strip()
+    ):
+        raise ValueError("no final answer")
+    return final.text
+
+
 async def run_agent_once(message: str, *, model: BaseChatModel | None = None) -> AgentResponse:
     """执行一次无会话持久化的 Agent 请求，并提取可信的最终答复和工具轨迹。"""
     # 1. 先校验用户输入；测试可注入假模型，真实请求才从配置创建模型。
@@ -61,44 +109,10 @@ async def run_agent_once(message: str, *, model: BaseChatModel | None = None) ->
                 {"messages": [{"role": "user", "content": message}]},
                 config={"recursion_limit": 12},
             )
-        # 3. 根据 AIMessage 发出的调用 ID 与 ToolMessage 的回执 ID 一一配对。
-        #    只有实际返回的工具结果才进入轨迹，避免将模型的文字描述当成执行事实。
+        # 3. 单轮与持久 Run 复用相同的消息验收，不能从文本猜测工具调用。
         messages = state["messages"]
-        pending = {}
-        traces = []
-        for item in messages:
-            if isinstance(item, AIMessage):
-                for call in item.tool_calls:
-                    call_id = call.get("id")
-                    if not call_id or call_id in pending:
-                        raise ValueError("invalid tool call id")
-                    pending[call_id] = call
-            elif isinstance(item, ToolMessage):
-                # 同一个调用只能完成一次；未匹配的回执不能归属于任意工具。
-                call = pending.pop(item.tool_call_id, None)
-                if call is None:
-                    raise ValueError("unmatched tool result")
-                result = item.content if isinstance(item.content, str) else str(item.content)
-                traces.append(
-                    ToolTrace(
-                        name=call["name"],
-                        args=call["args"],
-                        result=result,
-                        ok=item.status != "error" and not result.startswith("ERROR["),
-                    )
-                )
-        # 4. 只认可最后一条没有待处理工具调用的 AIMessage 作为最终答案。
-        #    缺失回执、无有效文本或未完成工具循环都必须明确失败。
-        final = messages[-1]
-        if (
-            pending
-            or not isinstance(final, AIMessage)
-            or final.tool_calls
-            or final.invalid_tool_calls
-            or not final.text.strip()
-        ):
-            raise ValueError("no final answer")
-        return AgentResponse(answer=final.text, tool_calls=traces)
+        traces = extract_run_tool_traces(messages)
+        return AgentResponse(answer=extract_final_answer(messages), tool_calls=traces)
     # 5. 错误统一映射为对外安全的错误码；不透传 Provider 的请求、密钥或堆栈。
     except ModelNotConfigured:
         raise

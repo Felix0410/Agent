@@ -7,11 +7,13 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import FastAPI
 
 from minideerflow.api.demo import router
+from minideerflow.api.runs import router as runs_router
 from minideerflow.api.threads import router as threads_router
 from minideerflow.config import get_settings
 from minideerflow.runtime.checkpoints import open_checkpointer
 from minideerflow.runtime.db import RuntimeDatabase
 from minideerflow.runtime.repository import RuntimeRepository
+from minideerflow.runtime.runner import RunService
 
 
 @asynccontextmanager
@@ -31,7 +33,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.database = database
         app.state.checkpointer = saver
         app.state.repository = repository
-        # 3. A 只提供 Thread API；后台 Runner/SSE 尚未建立。
+        # 3. worker 退出必须先于 Saver/DB 关闭，避免运行中的 Graph 使用已关闭连接。
+        runner = RunService(repository, saver, settings)
+        runner.start()
+        stack.push_async_callback(runner.shutdown)
+        app.state.runner = runner
         yield
 
 
@@ -41,6 +47,7 @@ def create_app() -> FastAPI:
 
     app.include_router(router)
     app.include_router(threads_router)
+    app.include_router(runs_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

@@ -160,3 +160,9 @@ uv run ruff format --check src tests
 ## P02-B/C/D 联合开发（等待编码）
 
 已完成联合设计：[P02-B/C/D 连续执行任务书](docs/tasks/P02-BD.md) 详细规定后台 Run、Graph SSE、页面流式聊天、历史和崩溃后保守恢复的逐文件编码、接口、状态一致性、假模型/真模型验证与验收。用户已授权 B→C→D 在同一次 Codex 会话中连续执行；**此处仅表示设计与授权，当前尚无 B/C/D 业务代码、测试或 Demo 结果**。
+
+## P02-B 后台 Run（本次增量）
+
+选择/新建会话后可以发送消息；202 仅表示任务入队，页面以有界轮询读取真实 CREATED/RUNNING/终态与保存的答案/工具结果。切换会话会清理旧轮询；刷新后从真实 Run 历史恢复。P01 单轮 Agent 和计算器调试区保留。
+
+新增 `POST /api/threads/{thread_id}/runs`（message）和 `GET /api/runs/{run_id}`。同会话活动任务 409，模型缺配置 503 且不创建 Run，队列满 429；后台最多 2 个 worker、8 个排队。Graph 超时/失败只写 FAILED 和稳定错误码，已进入 Graph 的会话保守标记需恢复；可新建会话继续。B 尚无 SSE。

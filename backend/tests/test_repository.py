@@ -252,10 +252,10 @@ def test_thread_api_lifespan_and_p01_preserved() -> None:
             "result": "60"
         }
         assert client.post("/api/demo/agent", json={"message": "hello"}).status_code == 503
-        # A 不能意外暴露尚未实现的 Run 提交入口。
+        # B 已增加 Run 入口；缺模型时仍不应创建持久化任务。
         assert (
             client.post(f"/api/threads/{thread['id']}/runs", json={"message": "hello"}).status_code
-            == 405
+            == 503
         )
     assert app.state.database._closed
 

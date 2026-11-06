@@ -116,6 +116,19 @@ class RuntimeRepository:
             )
         return run
 
+    async def check_thread_available(self, thread_id: str) -> None:
+        """准入前检查，保证恢复/忙错误优先；create_run 仍由唯一索引最终兜底。"""
+        async with self.database.transaction() as conn:
+            thread = await _thread(conn, thread_id)
+            if thread.needs_recovery:
+                raise RepositoryError("THREAD_REQUIRES_RECOVERY", "Create a new thread to continue")
+            async with conn.execute(
+                "SELECT 1 FROM runs WHERE thread_id=? AND status IN ('CREATED','RUNNING')",
+                (thread_id,),
+            ) as cursor:
+                if await cursor.fetchone():
+                    raise RepositoryError("THREAD_BUSY", "Thread already has an active run")
+
     async def get_run(self, run_id: str) -> RunDto:
         """读取权威 Run 状态，而非从 Graph 文本推测是否完成。"""
         async with self.database.transaction() as conn:

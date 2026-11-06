@@ -38,3 +38,17 @@ export function listThreads(): Promise<ThreadDto[]> {
 export function listRuns(threadId: string): Promise<RunDto[]> {
   return request(`/api/threads/${encodeURIComponent(threadId)}/runs?limit=50`);
 }
+
+export type RunAccepted = { run_id: string; thread_id: string; status: 'CREATED' };
+
+export function startRun(threadId: string, message: string): Promise<RunAccepted> {
+  return request(`/api/threads/${encodeURIComponent(threadId)}/runs`, { message });
+}
+
+export function getRun(runId: string): Promise<RunDto> {
+  return request(`/api/runs/${encodeURIComponent(runId)}`);
+}
+
+export function isTerminal(run: RunDto): boolean {
+  return ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(run.status);
+}

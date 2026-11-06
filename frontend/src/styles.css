@@ -104,3 +104,7 @@ article {
   .thread-workbench { grid-template-columns: 1fr; }
   .thread-detail { border-left: 0; padding-left: 0; }
 }
+
+/* B：会话选择与聊天并排；长消息与工具结果不撑破窄屏。 */
+.thread-workbench > section { min-width: 0; }
+.tool-trace { border-left: 3px solid #8bc3a7; padding-left: 12px; margin: 12px 0; }

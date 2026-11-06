@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { request } from './api';
 import ThreadList from './components/ThreadList';
+import ChatPanel from './components/ChatPanel';
+import type { ThreadDto } from './api/runtime';
 
 type AgentResponse = {
   answer: string;
@@ -13,6 +15,7 @@ type AgentResponse = {
 };
 
 export default function App() {
+  const [selectedThread, setSelectedThread] = useState<ThreadDto | null>(null);
   const [health, setHealth] = useState('尚未检查');
   const [expression, setExpression] = useState('(12+8)*3');
   const [result, setResult] = useState('');
@@ -72,7 +75,10 @@ export default function App() {
         <h1>Mini DeerFlow</h1>
       </header>
 
-      <ThreadList />
+      <div className="thread-workbench">
+        <ThreadList selectedId={selectedThread?.id ?? null} onSelect={setSelectedThread} />
+        <ChatPanel key={selectedThread?.id ?? 'none'} thread={selectedThread} />
+      </div>
 
       {/* 健康检查和计算器独立运行，不依赖模型配置。 */}
       <section>
@@ -134,7 +140,7 @@ export default function App() {
       </section>
 
       <footer>
-        当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02-A 会话列表。后续：后台 Run、SSE、Todo、文件。
+        当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02-B 后台会话 Run。后续：SSE、Todo、文件。
       </footer>
     </main>
   );
