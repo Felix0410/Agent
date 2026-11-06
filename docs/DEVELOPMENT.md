@@ -949,31 +949,118 @@ P04 实际源码：`agents/lead.py:build_lead_agent(model, tools, checkpointer, 
 **资料/重要差异**：DeerFlow v2.0.0 `backend/packages/harness/deerflow/tools/tools.py`、`mcp/tools.py`、`skills/parser.py`、`skills/tool_policy.py`、`agents/middlewares/skill_activation_middleware.py`；LangChain 当前官方 `awrap_tool_call` / [Agent Middleware](https://docs.langchain.com/oss/python/langchain/middleware)；[LangChain MCP adapters 源码](https://github.com/langchain-ai/langchain-mcp-adapters/blob/main/langchain_mcp_adapters/client.py)；[MCP 安全实践](https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices)；[官方 MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)。上述是参考机制，不要直接移植 DeerFlow 的 SessionPool/前端管理或复制全部 Skill 系统。
 
 
-### P06 — 上下文压缩、预算、取消与恢复边界
+### P06 — 运行预算 / 上下文压缩 / 取消与恢复（2026-11-06 正式详细设计）
 
-**业务链**：Run 启动时设置模型/工具/时间预算 → 每次调用前后记录用量 → 长工具输出进入 Artifact，仅把短摘要/ID 注入消息 → 接近上下文限制时压缩旧消息并保护用户目标、Todo、引用与文件 ID → 任务结束时准确结算 Run；取消或服务重启走独立的 Runtime 状态逻辑。**上下文压缩不替代 Checkpoint，Checkpoint 不替代 RunService。**
+> **状态：PLAN_READY（仅设计、未开始 P06 代码和测试）**。用户已明确请求“设计 p6”，不是自动授权开始本地 Codex 或将 P02–P05 设为 ACCEPTED。工作分支 `feat/p06-context-budget-cancel` **从含 P05 A/B/C/D 真实代码的** `feat/p05-tools-mcp-skills` 派生。逐文件实现与局部测试以 [P06-A/B/C/D Codex 合同](tasks/P06-ABCD.md) 为准，每步交付同步前端、独立测试/提交，关键边界失败立即停止，不进入 P07。
 
-| 新增/修改文件 | 编码必须完成的具体内容 |
-| --- | --- |
-| `runtime/budget.py` | `RunBudget(max_steps,max_tool_calls,max_seconds,max_input_tokens_estimate)`；`BudgetTracker.before_model/before_tool/record_usage`，触发上限后返回 `BUDGET_EXCEEDED` 与统计。估算 token 与提供方真实 usage 分开标记，禁止把估算说成实际账单。 |
-| `agents/context.py` | `ContextManager.prepare(messages,todos,refs,budget)`：保留最近交互和关键用户约束；将旧消息摘要化，必要时调用已配置模型进行 summary；保护当前 Todo、真实 source_ids、artifact_ids，不丢失未完成步骤。 |
-| `agents/middleware.py` | 通过官方 `AgentMiddleware` 或当前 `create_agent` 支持的中间件装配预算、工具输出长度、异常转换、摘要策略；**不重新实现模型/工具循环**。对支持的官方 Middleware 优先直接配置，仅对缺少的行为实现小型自定义包装。 |
-| `runtime/usage.py` | `UsageRecord(run_id,task_id?,model,input_tokens?,output_tokens?,estimated)`，统计模型/子任务/工具耗时；缺失供应商 usage 时保留 unknown/estimated 标志，不虚构 0 成本。 |
-| `runtime/runner.py`（修改） | 添加取消信号（`asyncio.Event` 或等价）与 `request_cancel(run_id)`；新工具执行前检查取消；已经开始的外部副作用不能假定立即停止或自动撤销；按真实结果写终态。 |
-| `runtime/repository.py`（修改） | 增加 `CANCELLING`、`INTERRUPTED/UNKNOWN` 状态需要时迁移；启动时检查旧 RUNNING 并标记 `INTERRUPTED/UNKNOWN`，不自动重新执行未知副作用动作。 |
-| `api/runs.py`（修改） | `POST /api/runs/{run_id}/cancel`：幂等请求，返回当前真实状态；已终结 Run 不重新启动。 |
-| `tests/test_budget.py`、`tests/test_context.py`、`tests/test_cancel_recovery.py` | 超限停止、摘要保护、真实/估算区分、取消后不启动新工具、服务重启孤儿标记和外部写工具 UNKNOWN 不被盲重试。 |
+#### 1. 用户业务主线、功能范围
 
-**算法/约束固定**：
-- 每 Run 默认 `max_steps=40`、`max_tool_calls=30`、`max_seconds=600`（可在配置中调整），保护系统不进入无限循环。模型使用量若不支持精确记录，标 `estimated`。
-- 工具结果文本超过建议阈值 12 KB 时存入 Artifact 并给模型短摘要和引用 ID；裁剪不能破坏引用可定位性。
-- ContextManager 只摘要较旧、已完成的交互；当前用户指令、尚未完成 Todo、关键证据/文件 ID 以结构化方式单独注入；摘要失败则按预算安全退出，不能静默丢上下文后继续。
-- 重启时只恢复已经落盘的 Thread/Graph 数据与标记 Run，**不自动恢复进程内并发 Sub-Agent**；有副作用操作的结果 UNKNOWN 不重试。
-- 对同一个 run_id 重复 cancel 应返回确定状态；若仍在调用外部工具，显示 CANCELLING/UNKNOWN 而不是提前声称 CANCELLED。
+**正向链路**：用户发起较长 Thread Run → RunService 建立有界预算和共享 UsageTracker → 每次 Lead/Child 模型调用及工具调用前校验剩余额度，结束后从模型实际 `AIMessage.usage_metadata` 记录 provider usage；历史接近单请求上下文阈值时，只压缩**已经完成**的旧回合，保留当前目标、最近完整消息、Todo 和真实文件/Artifact ID；过长工具输出只向模型返回短预览和已登记的可追溯文件引用 → P02 Run 与 SQLite 使用量持久化 → Web 实时/刷新后显示预算与实际/估算用量。
 
-**实现次序**：P06-A Budget/Usage → P06-B Summary + Tool Output → P06-C Cancel/Restart 核查 → P06-D 局部故障注入。测试只测当前 Budget/Context/Runner/API 的直接影响，不重跑 Research/RAG 全量评测。
+**中断链路**：用户按“取消 Run” → HTTP 在 SQLite 原子标记 `cancel_requested_at`（表示**请求已接收**而非执行已经停止）→ 尚未运行的 CREATED 直接安全终结 CANCELLED，排队记录成为可跳过 tombstone → RUNNING 的 Graph Task 收到取消、拒绝后续新 Tool/Model 调用，等待 child Task/Workspace/SQLite 清理 → 状态最终为 CANCELLED 或保守 FAILED/OUTCOME_UNKNOWN；重启时仍只核查并终结孤儿，**不重放未知副作用**。
 
-**DeerFlow 参考**：`agents/middlewares/summarization_middleware.py`、`tool_output_budget_middleware.py`、`loop_detection_middleware.py`、`runtime/runs/manager.py`、`runtime/runs/worker.py`（均在 Harness 根下）。
+**不做**：跨进程恢复正在运行的 Sub-Agent、长期记忆/向量检索、真正 Tokenizer 精确成本计费、多用户配额、第三方计费查询、任意重新执行 ToolCall、通用补偿事务、在浏览器关闭时自动取消、替换 P02 Checkpointer、后台作业中心或分布式队列。**本地单 Worker/SQLite/Graph/Workspace/MCP/Skills 现有架构不变**。
+
+#### 2. P05 实现基线与本阶段关键取舍
+
+实际当前源码：`runtime/runner.py` 由有界 Queue（2 workers/8 pending）执行 `_execute_run`，父持久 Run `run_timeout_seconds=150`，Graph `recursion_limit=36`，`task_registry.close_run` 执行清理；`runtime/repository.py` 只允许 CREATED/RUNNING→SUCCEEDED/FAILED，`RunStatus.CANCELLED` 虽已在枚举和数据库 CHECK 中却**从未启用**；`runtime/db.py` 有 CHECK 约束与已有数据；`tools/executor.py:ToolGuardMiddleware.awrap_tool_call` 会原样透传 `Command`、按工具超时与权限检查；`agents/lead.py` 可选传 `middleware`；`agents/subagents/executor.py` 独立 create_agent 无父 Checkpointer，`context.py` 的 AgentRunContext/ChildContext 仍继承 P03 WorkspaceContext；`runtime/streaming.py` 采集真正的 ToolMessage / AIMessage；React 当前 180 次 1 秒轮询即停止继续查询。
+
+**重要修订原粗规划**：
+1. 不做 `runs.status CHECK` 的破坏性 SQLite 表重建。**沿用 CREATED/RUNNING/SUCCEEDED/FAILED/CANCELLED**。用新增 nullable `cancel_requested_at` 表示 RUNNING 时“取消处理中”，前端展示“正在取消”，最终 CANCELLED 仅说明**本地执行与子任务已停止**；无法确认外部写入时用 FAILED + `OUTCOME_UNKNOWN` + `needs_recovery=1` 提醒人工检查，**不要**声称外部动作已撤销或支持精确一次。
+2. P06 允许长 Run，`run_timeout_seconds` 改默认 **600 s**、上界 600；前端轮询从 180 次调整到**720 次**、Run 的 EventSource 重连策略仍按 P02，不无限轮询。P01 单轮 `model_timeout_seconds=45`、child 单任务35 s/14图步、父 `recursion_limit=36` 不变。最大请求时长与调用次数/工具次数**各自独立**，不是 40 次模型调用等于 LangGraph 40 图节点步。
+3. 数据库只增可回滚/幂等的 `runs.cancel_requested_at` 一列和预算/usage 表/索引，不改旧 Run/Thread/Checkpoint ID，默认旧数据可读。增列由 `RuntimeDatabase.init_schema()` 检查 SQLite `PRAGMA table_info` 后**仅在缺列时 ALTER TABLE ADD COLUMN**，不可通过修改 CREATE TABLE IF NOT EXISTS 假装旧库升级。
+4. `agents/context.py` 已负责可信 Context dataclass，新增独立 `agents/context_manager.py` 管理摘要，`agents/middleware.py` 管理执行 hook；不复制同名 `Context`，不把可变预算/服务对象写进 Graph State/SQLite Checkpoint。
+5. P05 MCP 本期仍然只有批准的本地只读 Server；P06 不为 Child 增加 MCP/Skills/文件写权限。压缩与预算并不修改 `ToolPolicy`、`TaskRegistry` 限额或 Skill 前置条件。
+
+#### 3. RunBudget / Usage：可计数、可观测、不虚构
+
+默认每父 Run：
+- `max_model_calls=40`、`max_tool_calls=30`，**父+所有 Child + 触发摘要的模型调用共享同一额度**，并发下用同步/async lock 原子预扣；失败/超时调用也消耗预留次数。父图节点步上限36、Child分别14仍继续各自限制，因此40不是可保证用满的数字。
+- `max_input_tokens_estimate=120000`（Run 累积输入估算软/硬保护用上界）、`context_soft_limit_estimate=12000`、`context_hard_limit_estimate=18000`（单次请求的**保守估算值**）；模型实际 context window 因提供方不同而不确定，这些数**不是**模型端承诺的窗口。估算使用确定性文本 UTF-8 大小/消息结构开销，测试用固定逻辑，不输出“精确 tokens”；当下一请求超过 hard 必须先摘要或失败，不可透传超限然后让 Provider 兜底。
+- `max_seconds=600` 从 Run **转 RUNNING** 的单调时钟开始；排队不计运行预算，运行中实时检测 Deadline，所有 await 须受已有总 `asyncio.timeout` 控制；Sub-Agent 单次仍35秒。超额统一 `BUDGET_EXCEEDED`，不继续新的模型/工具调用；已发出但未确认成功的外部写操作不自动重试。
+- Usage 用模型回复的 `AIMessage.usage_metadata`（或已锁版真实 provider metadata）取得 `input_tokens/output_tokens`，**按父/子/摘要每一次唯一模型调用 ID 去重**。没有使用量时 `provider_input_tokens/provider_output_tokens=NULL`，另填 `estimated_input_tokens`、`usage_source="estimate"|"provider"|"unknown"`；不能把 estimated 计入真实 provider total，不能将缺失=0或算出不存在的金额。SSE 流式 chunk 不能与最终 AIMessage 重复计费。
+- `RunBudgetTracker` 属于每个在执行 Run 的可信内存对象（锁+deadline+共享计数器），Parent 与 Child Context 指向同一 tracker；记录一份业务 SQLite 可查询聚合 `run_usage`（run_id PK、model_calls/tool_calls、provider token 汇总/unknown_count、estimated tokens、elapsed_ms、compaction_count、output_externalized_count 等）与**必要唯一 invocation id**的模型/工具事件 `usage_calls`。所有写入归属真实 Run，失败应脱敏并按保守终态收尾。SQLite 用于刷新后的使用量，不依赖 SSE 内存窗口。
+- 精确用量持久化由自定义 `UsageBudgetMiddleware` 基于官方 `awrap_model_call` 收到**最终模型响应**再记录（锁版可能是 ModelResponse），child 也安装同一 Middleware；Tool 计数/耗时由 `ToolGuardMiddleware` 调用共享 Tracker，child 另设轻量 Budget Middleware（保留原 P04 只读角色工具）；不要在 `stream_agent` 采集 delta 时再计算一遍。必要时摘要模型按相同 Tracker 记录。每次请求开始先预扣、失败也记次数；生产者与 DB 提交冲突时不得把已发起的调用假装未发生。
+- `GET /api/runs/{run_id}/usage` 返回 `RunUsage`（`run_id,model_calls,tool_calls,provider_input_tokens?,provider_output_tokens?,usage_unknown_calls,estimated_input_tokens,elapsed_ms,compaction_count,output_externalized_count,budget`），不存在 Run 404；无调用时计数0、provider tokens 为 NULL；EventBus 新增 `budget_updated` 通知小型数值统计，**不能发送原始 prompt、模型响应、API Key、工具正文**。
+- `UsagePanel` 每个 Run 都显示模型/工具次数、预算上限、真实 provider token 与估算区分、耗时、压缩次数；Run 完成/刷新/重启后从 GET 权威查询，SSE 只做可选即时显示。
+
+#### 4. 长消息/工具输出与上下文压缩
+
+**两层问题不要混淆**：`ToolMessage` 的过长正文进入 Graph State 会引发上下文膨胀；历史 Message 越来越多会引发后续模型输入过大。分别处理：
+- `tools/output_budget.py:ToolOutputBudgetMiddleware` 安装在 P05 `ToolGuardMiddleware` 外层，在工具真实完成后处理 `ToolMessage|Command`，**先确认 type/ToolCall ID 与真实错误状态**，只转换超过 **12 KiB UTF-8** 的**成功纯文本** ToolMessage；小结果不改变，失败消息不转成功，`Command`（特别是 `write_todos`）默认原样传递并有测试。不得重新调用原工具、不静默截断原数据、不得执行 ToolResult 内不可信“指令”。
+- 已有 `read_text(file_id)` 结果可直接指向**原来登记过的当前 Thread file_id**，模型只看到带证据 `file_id`、字节数与 1 KiB 预览以及“原始文件仍可分段处理/改问更小范围”的说明，避免重复写一份相同文档占用 Thread 30MiB/50文件额度；若是其它实际无登记来源的长纯文本结果，先以当前可信 parent Run 的 `WorkspaceService.write_text` 存成新的唯一 `tool-output-<uuid>.md` Artifact，得到 `artifact_id/file_id` 才用小回执替换；目录已满/登记失败则返回 `ERROR[TOOL_OUTPUT_TOO_LARGE]`，不把长内容漏回模型，不伪称“产物已保存”。**Child** 只读、不建立新 Artifact，过长 `read_text` 只可引用原已登记 file_id；其它超长 child 回执按稳定错误处理，绝不利用输出预算绕过 P04 文件写限制。
+- 替换必须维持原始 `tool_call_id`、`status`/来源和 ToolTrace 语义；`Command` 的工具状态变更不能因转存丢失。ToolOutput Artifact 只登记真实结果，原数据库/文件的无跨库原子限制照 P03，取消/异常时仍需完整清理。
+- `agents/context_manager.py` 与 `agents/middleware.py:ContextCompactionMiddleware`：在模型请求预计超过 12k token 时，将消息分为**已完成、可安全摘要的旧工具/对话回合**与**必须保留的最后 6 条完整交互消息及当前 HumanMessage**。任何带未配对 tool_calls 的 AIMessage 与后续 ToolMessage 必须作为整体保留，不能摘要掉一个、留下另一个；保留当前 Run 的用户原始目标、活动未完成 Todo（Graph `P04AgentState.todos` 独立字段 + SQLite）、真实已登记的文件/Artifact IDs 与关键原始证据引用。只摘要旧回合，不跨 Thread 汇总，不直接修改 P02 Run 历史。
+- 优先对齐锁版 LangChain 官方 `SummarizationMiddleware` + `RemoveMessage/REMOVE_ALL_MESSAGES` 的安全状态更新；如果官方通用摘要 API 无法同时确保上述 Todo/ToolMessage 完整性，允许在项目的 `abefore_model` 做**最小**安全分区/替换实现，必须写 Fake+Checkpoint 真实状态测试，不能引入自造 Agent loop。摘要模型使用同一已配置模型，计入同一 Run 预算和耗时，单次摘要文本最多 2KiB、额外最少保留最近 6 条、拒绝用摘要代替用户当前指令；不要将摘要“变成更高权限的系统指令”。摘要返回空、超时、估算仍高于硬上限，应 `CONTEXT_BUDGET_EXCEEDED` 失败而非静默删除仍未处理的任务；无配置模型时本期仍可直接使用无摘要短会话。
+- `context_compacted` EventBus 只发布 `{run_id,old_message_count,new_message_count,estimated_before,estimated_after}`；SQLite 使用量只记录次数，不将原对话正文复制进新表。Graph Checkpointer 保留摘要后状态，**SQLite Run 历史依旧完整记录各轮用户提问/最终答复**，但 Graph 的历史消息可被安全压缩；摘要不是 Checkpoint 的替代品。
+
+#### 5. 用户取消、服务关闭、重启恢复边界
+
+**API**：`POST /api/runs/{run_id}/cancel` 无 body，幂等，返回 `{run_id,status,cancel_requested_at?}`。不存在404；已 SUCCEEDED/FAILED/CANCELLED 返回既有真实终态而不修改；CREATED 在业务库事务内直接 `CANCELLED`、写 finished_at，运行队列里 ID 保留 tombstone，worker 拿到时跳过且不调用 Graph/Model；RUNNING 仅原子写 `cancel_requested_at` 并返回**202 请求已接收**，此时 status 仍 RUNNING，页面按 cancel_requested_at 显示“正在取消”，不提前返回 CANCELLED。重复 cancel 不增加信号、不改变已保存的请求时间。
+
+**RunService 内部**：添加单进程 `RunCancellationRegistry`（`runtime/cancellation.py`）保存当前图任务句柄、cancel event、工具执行不确定性标记；**worker 不可因为一个 Run 的 cancel 就被杀死**：把单个 Run 的 `_execute_run` 放在由 worker 等待并拥有的独立 Task 中，停止信号取消的是该 Run Task；worker 收尾继续消费其它 queued Run。用户请求与模型自然终态存在竞态，终结事务必须以 `cancel_requested_at IS NULL` 等 CAS 防止“取消已提交后又成功”；若成功先提交，cancel API 读到 SUCCEEDED 而不是伪造取消成功。Graph 取消后必须先 `await TaskRegistry.close_run`，等待 Workspace/ToolGuard 关键事务，才写 Run terminal 和 `run_end`，释放当前 Thread 的活动 Run 约束。ToolGuard/Usage Middleware 在下一次 Model/Tool 发起前检查 cancel 标记，取消后不得继续新增操作。
+
+**结果判定**：
+- 未进入 Graph 的 CREATED → CANCELLED、`needs_recovery=0`，继续正常 Thread。
+- 已进 Graph 且确定被本地完全取消并清理 → CANCELLED，**保守设置 `needs_recovery=1`**（Graph 可能部分写了 Checkpoint）；不提供从最后一条半完成消息盲续跑。用户创建新 Thread 继续。
+- ToolGuard/RunService 检测到已发起的写/外部调用但**无法确认其真实结果**，或取消/崩溃导致进程结果不明 → 最终 **FAILED + `OUTCOME_UNKNOWN` + needs_recovery=1**；页面明确提示检查已登记 Artifact/外部系统后手动处理，绝不声称事务已回滚，也不自动重试。当前 P05 MCP 默认只读，但这条边界给未来外部写工具留安全位置。
+- Run 超时/预算耗尽仍写 FAILED + 稳定 `MODEL_TIMEOUT` / `BUDGET_EXCEEDED` / `CONTEXT_BUDGET_EXCEEDED`，是否需恢复沿既有 graph_started 保守规则。**关闭后端**与**用户主动取消**明确区分：无显式取消请求的 shutdown/重启不写 CANCELLED，只按 `RUN_INTERRUPTED`/不确定性失败处理。
+- 重启 `RuntimeRepository.reconcile_orphans()` 检测旧 CREATED 与 RUNNING（含 cancel_requested_at 非空）按实际是否进入 Graph 保守标记，已有 P02 旧库无法从业务库判断是否已进入图时宁可设 needs_recovery=1；不自动重新派发 child 或调用写工具。P04 子任务 `reconcile_orphaned_subtasks` 延用 FAILED/SUBTASK_INTERRUPTED，无精确恢复承诺。
+- SSE 增加 `run_cancel_requested`，终态继续使用旧 `run_end` 且必须 DB 先落终态；浏览器断开 SSE **不触发取消**，只有用户点击取消才走该 API。Run 仍 RUNNING 且已申请取消时禁止重复点击；未知结局需明确的 UX 警告。
+
+#### 6. 精确文件、接口和前端职责
+
+| 文件 | 本期职责 |
+|---|---|
+| `backend/src/minideerflow/runtime/budget.py` | `RunBudget` 与 `RunBudgetTracker`：父子共享的原子次数预扣、估算输入预算、deadline、取消检查及终结汇总 |
+| `backend/src/minideerflow/runtime/usage.py` | `UsageRecord/UsageRepository` 与 provider usage 解析、去重/归属/NULL vs estimate 语义、查询 DTO |
+| `backend/src/minideerflow/runtime/db.py` | 增加 `run_usage`、`usage_calls`、索引；幂等 ALTER `runs.cancel_requested_at`，旧 P05 数据不断表、不断列 |
+| `backend/src/minideerflow/agents/middleware.py` | `UsageBudgetMiddleware`/ `ContextCompactionMiddleware`；父/子模型计数与用量；P05 原 ToolGuard 仍存在 |
+| `backend/src/minideerflow/agents/context_manager.py` | 旧回合原子分组、已配对 ToolCall 保留、当前目标/Todo/真实 refs 保护、摘要+安全 Checkpoint 更新、触发条件 |
+| `backend/src/minideerflow/tools/output_budget.py` | 官方 `awrap_tool_call` 长文本 12KiB 控制：ToolMessage 短预览、登记原文件引用或安全产物、不能触碰 Command/失败消息 |
+| `backend/src/minideerflow/tools/executor.py` | P05 ToolGuard 最小加入预算预扣/耗时、取消检测、工具结果未知标记；原权限/Schema/MCP 规则不变 |
+| `backend/src/minideerflow/agents/context.py` | AgentRunContext/ChildContext 加共享 budget/usage/cancellation 只读依赖；仍继承 WorkspaceContext、child 不增权限 |
+| `backend/src/minideerflow/agents/lead.py` | 复用可选 Middleware 列表，指定 P05 Guard + P06 Budget/Context/Output 合法顺序 |
+| `backend/src/minideerflow/agents/subagents/executor.py` / `dispatcher.py` | child 同步使用共享 tracker 和取消信号；Child 独立 Checkpointer None 与 P04 超时、Tool 白名单保持；子模型实际 usage 计入 parent Run |
+| `backend/src/minideerflow/runtime/cancellation.py` | 活动单 Run Task/信号、in-flight 未知结果标志、请求后的等待与注销；worker 不取消、无悬空 child |
+| `backend/src/minideerflow/runtime/models.py` / `repository.py` | RunDto 增可选 cancel_requested_at/提示字段；CAS 取消和单向 CANCELLED 迁移、未知失败/孤儿核查、无旧数据损坏 |
+| `backend/src/minideerflow/runtime/runner.py` | 组装并传递预算/usage/工具输出/摘要/取消，单 Run Task 与 Queue tombstone，父 timeout 600 秒、SQL 终态与子任务回收 |
+| `backend/src/minideerflow/api/runs.py` | POST cancel + GET usage，保留现有 Run/SSE API、脱敏错误与错误码 |
+| `backend/src/minideerflow/main.py` / `config.py` / `.env.example` | 生命周期初始化 UsageRepository/CancelRegistry，预算默认与硬上界，资源关闭顺序不变 |
+| `frontend/src/api/runtime.ts` | CancelResponse/RunUsage DTO、新请求函数、`cancel_requested_at`、SSE 新事件订阅；轮询 720 秒 |
+| `frontend/src/components/UsagePanel.tsx` | 当前和历史 Run 的真实/估算用量、预算计数和摘要次数，刷新 GET |
+| `frontend/src/components/RunStatus.tsx`、`ChatPanel.tsx`、`styles.css` | Run 取消按钮/取消中状态/保守失败/新事件/用量面板；P02–P05现有控件无倒退 |
+| `backend/tests/test_budget.py`、`test_usage.py`、`test_context.py`、`test_output_budget.py`、`test_cancel_recovery.py`、`test_budget_demo.py` | Fake 模型、SQLite Saver+业务库、工具闭环、压力限额/摘要/取消/shutdown与前端 HTTP/SSE 测试 |
+| P02–P05 直接消费方测试 | `test_runner.py/test_runs_api.py/test_checkpoint.py/test_tool_guard.py/test_subagents.py/test_planning_demo.py/test_tools_demo.py` 等仅按具体接口影响运行 |
+| `README.md` / `docs/progress/P06.md` / `docs/tasks/P06-ABCD.md` / `docs/ARCHITECTURE.md` | A–D 真实 SHA、局部测试/构建、真实/估算值区别、用户 Demo 与限制 |
+
+#### 7. A/B/C/D 实施步骤与每阶段验证
+
+**P06-A · 共享模型/工具预算、Usage SQL、UsagePanel**
+1. 先用已锁版 Fake 检验 `awrap_model_call` 及其 ModelResponse/AIMessage usage_metadata、child `create_agent`、P05 `awrap_tool_call` 的顺序；禁止靠猜测双计数。
+2. 实现 `runtime/budget.py`、`usage.py`、DB 表/索引、官方 Middleware + Runner/Child 上下文注入、GET usage；前端 UsagePanel + SSE 数字。独立 P01 模式不增加 P06 复杂预算，原 45s 生效。
+3. 验证父子共享 max_model_calls40/tool_calls30、并发预扣无超额、provider usage 与估算独立、缺失显示 unknown/NULL、Run刷新重启与历史、无 ToolCall ID 污染、P04 Task/ToolGuard 不受影响。局部 tests + Ruff + TS build；独立 SHA。
+
+**P06-B · 长工具输出外置、Graph 上下文安全压缩**
+1. 先用受控 20KiB/60KiB 样例实测 `ToolOutputBudgetMiddleware` 对普通 ToolMessage、P04 `Command`、P05 Guard 的真实调用顺序；保持工具只执行一次。
+2. 实现 `tools/output_budget.py`（已有 file_id优先引用、不重复复制，非登记来源结果登记 Artifact），`agents/context_manager.py`、摘要 Middleware/Graph State；配置 12k/18k 单请求估算阈值。前端 UsagePanel 展示 compaction_count/output_externalized_count；SSE 两个轻量事件。
+3. 测多个旧回合压缩后 Checkpoint 仍可用、当前用户目标及 Todo/未完成 ToolCall 配对保留、真实 file ID/Artifact ID 与 P03 下载匹配、摘要失败拒绝继续、无模型短会话不触发、超限/额度不足 fail closed、跨 Thread 不串消息；局部 tests + Ruff + TS build，独立 SHA。
+
+**P06-C · HTTP 取消、Queue/Runner/Child 竞态、历史状态**
+1. 实现 `runs.cancel_requested_at` 原地兼容迁移、`RunCancellationRegistry`、`RuntimeRepository.request_cancel` 和 CANCELLED 真实迁移；不改旧 status CHECK / 既有 Run 终态/Thread 独立性。
+2. 在 Runner 让 worker 等待单 Run Task，显式 cancel 只取消该 Run、不杀 Worker，`TaskRegistry.close_run`/Workspace shield/DB 事务完成后发终态；queued CANCELLED 记录被 worker 安全跳过，竞态用 SQL CAS。新增 API/前端取消按钮与运行中提示，不影响历史 GET。
+3. 测重复 cancel、CREATED 未模型执行、RUNNING 停止 tool/child、外部未确认 FAILED/OUTCOME_UNKNOWN、cancel/success 同时发生、shutdown 无用户取消不假报 CANCELLED、重启 orphan 不重放、SSE 断开不取消、timeout/BUDGET_EXCEEDED 与 P02 恢复状态；局部 tests + Ruff/TS Build，独立 SHA。
+
+**P06-D · 完整联合 Demo + 故障注入/手动验收材料**
+1. 用真正的临时 SQLite 两库+Workspace、Fake Model、可控慢模型、真实 ToolNode 运行：长文档/多轮逼近阈值 → Graph 完整消息压缩、Todo保留、引用不丢 → 长 ToolMessage 外置或原 file_id 引用 → Usage 总量/Null semantics → User cancel 中断一个复杂 Run → 并发队列中另一个 Run 继续正常 → 历史刷新/重启不丢失、产物可下载。
+2. P05 真实本机 MCP 可用时做连接/离线与取消边界；默认无 MCP 仍可验收 P03 文件/P04委派。若现有真实 Tool Calling 模型可用，单独使用短合成材料 Smoke 真实 usage、一次触发摘要（不要通过大量真实 token 堆叠强行触发）、取消与后续新会话；真实/估算/Mock 分开记录。
+3. 旧 P01 计算/单轮、P02 Run/SSE/Checkpoint、P03 Workspace、P04 Todo/Child、P05 Registry/Skills/MCP 直接消费者必须通过局部回归；保留中文关键注释和 `# 1/2/3` 分段。仅实际运行的 pytest、Ruff、uv lock、前端 npm build 记结果；无全量 P07+。真实浏览器含 UsagePanel、取消中/终态、刷新/重启。
+4. 进度写入 A/B/C/D 真实 SHA/局部数量/模型账务来源/异常与未验，D 结束状态 `PENDING_REVIEW` 供用户手动验收，**不把 P02–P05 当作已亲测、不自动进入 P07**。
+
+**停止条件**：官方 Middleware/SQL旧库增列/ToolMessage Command/usage去重任何一项不安全；压缩破坏当前目标或工具成对消息、取消后仍新增子任务/模型调用、原子 CAS 失效、模型推测用量被记成真实费用、文件外置丢数据、Run 提前显示 CANCELLED、未知副作用被重放，Codex 必须停止并给最小复现；不得只为了 Demo 放松约束。所有状态只由真实运行和业务库决定。
+
+**参考**：DeerFlow v2.0.0 源码 `backend/packages/harness/deerflow/agents/middlewares/{summarization_middleware.py,tool_output_budget_middleware.py,loop_detection_middleware.py}` 和 `backend/packages/harness/deerflow/runtime/runs/{manager.py,worker.py}`；官方 [LangChain Middleware](https://docs.langchain.com/oss/python/langchain/middleware)、[短期记忆与状态](https://docs.langchain.com/oss/python/langchain/short-term-memory)。优先参考**当前锁版**的 API，与这些上游不同则实测后做最小兼容变更。
+
 
 ### P07 — Deep Research 的完整业务实现
 
