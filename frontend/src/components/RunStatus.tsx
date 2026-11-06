@@ -1,7 +1,10 @@
+import TodoPanel from "./TodoPanel";
+import type { TodoItem } from "../api/runtime";
 import type { RunDto } from "../api/runtime";
 
 /** 只展示持久化终态，不把模型的“完成”措辞作为成功证据。 */
 export type LiveRun = {
+  todos?: TodoItem[];
   fragments: Record<string, string>;
   answer: string | null;
   tools: Record<
@@ -13,9 +16,11 @@ export type LiveRun = {
 export default function RunStatus({
   run,
   live,
+  planRevision = 0,
 }: {
   run: RunDto;
   live?: LiveRun;
+  planRevision?: number;
 }) {
   return (
     <article>
@@ -24,6 +29,7 @@ export default function RunStatus({
         {run.input_message}
       </p>
       <p>状态：{run.status}</p>
+      <TodoPanel runId={run.id} status={run.status} snapshot={live?.todos} revision={planRevision} />
       {run.status === "SUCCEEDED" && <output>{run.answer}</output>}
       {live && !["SUCCEEDED", "FAILED", "CANCELLED"].includes(run.status) && (
         <div aria-live="polite">

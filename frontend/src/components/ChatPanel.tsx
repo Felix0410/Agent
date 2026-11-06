@@ -7,7 +7,7 @@ import {
   startRun,
   subscribeRunEvents,
 } from "../api/runtime";
-import type { RunDto, ThreadDto } from "../api/runtime";
+import type { TodoItem, RunDto, ThreadDto } from "../api/runtime";
 import RunStatus from "./RunStatus";
 import type { LiveRun } from "./RunStatus";
 
@@ -21,6 +21,7 @@ export default function ChatPanel({
   onThreadUpdate: (thread: ThreadDto) => void;
   onRunFinished: () => void;
 }) {
+  const [planRevision,setPlanRevision] = useState(0);
   const [runs, setRuns] = useState<RunDto[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -69,6 +70,7 @@ export default function ChatPanel({
     async function poll() {
       clearTimeout(timer);
       const ticket = ++version;
+      setPlanRevision(old=>old+1);
       try {
         const run = await getRun(activeRun!);
         if (!live || ticket !== version) return;
@@ -109,6 +111,9 @@ export default function ChatPanel({
       (event) => {
         if (!live) return;
         const p = event.payload;
+        if (event.type === "todo_updated" && Array.isArray(p.todos)) {
+          setLiveRun(old=>({...old,todos:p.todos as TodoItem[]}));
+        }
         if (
           event.type === "assistant_delta" &&
           typeof p.message_id === "string" &&
@@ -212,6 +217,7 @@ export default function ChatPanel({
           key={run.id}
           run={run}
           live={run.id === activeRun ? liveRun : undefined}
+          planRevision={planRevision}
         />
       ))}
       {recovering && <p role="alert">此会话需恢复，请新建会话继续。</p>}

@@ -93,6 +93,7 @@ export function subscribeRunEvents(
     onUnavailable();
   };
   const kinds = [
+    "todo_updated",
     "run_start",
     "assistant_delta",
     "tool_start",
@@ -155,4 +156,9 @@ export function subscribeRunEvents(
     if (!closed && ++reconnects >= 3) unavailable();
   };
   return stop;
+}
+
+export type TodoItem = {todo_id:string; title:string; status:"pending"|"in_progress"|"completed"; position:number};
+export function getTodos(runId:string):Promise<TodoItem[]> {
+ return request(`/api/runs/${encodeURIComponent(runId)}/todos`);
 }

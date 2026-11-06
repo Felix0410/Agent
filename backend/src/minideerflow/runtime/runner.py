@@ -7,16 +7,20 @@ from collections.abc import Callable
 from langchain_core.language_models import BaseChatModel
 from openai import APIError, APITimeoutError
 
+from minideerflow.agents.context import AgentRunContext
 from minideerflow.agents.lead import build_lead_agent
 from minideerflow.agents.service import AgentExecutionError, validate_message
+from minideerflow.agents.state import P04AgentState
 from minideerflow.config import Settings
 from minideerflow.core.model import ModelNotConfigured, build_chat_model
 from minideerflow.runtime.events import EventBus
 from minideerflow.runtime.models import RunAccepted, RunDto, RunStatus
+from minideerflow.runtime.plan_service import PlanService
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.streaming import stream_agent
 from minideerflow.tools.calculator import calculate
 from minideerflow.tools.file_tools import list_files, read_text, write_text
+from minideerflow.tools.todo_tool import write_todos
 from minideerflow.workspace.models import WorkspaceContext
 from minideerflow.workspace.service import WorkspaceService
 
@@ -43,7 +47,9 @@ class RunService:
         events: EventBus | None = None,
         model_factory: Callable[[Settings], BaseChatModel] | None = None,
         workspace: WorkspaceService | None = None,
+        plans: PlanService | None = None,
     ) -> None:
+        self.plans = plans
         self.events = events
         self.workspace = workspace
         self.repository = repository
@@ -129,11 +135,28 @@ class RunService:
             if self.workspace is not None:
                 # 身份来自已持久化的Run，不从Prompt/模型JSON/全局变量取得。
                 context = WorkspaceContext(run.thread_id, run.id, self.workspace)
+                tools = [calculate, list_files, read_text, write_text]
+                p04 = self.plans is not None
+                if p04:
+                    context = AgentRunContext(
+                        run.thread_id,
+                        run.id,
+                        self.workspace,
+                        self.plans,
+                        lambda kind, payload: self._emit(run.id, kind, payload),
+                    )
+                    tools.append(write_todos)
                 agent = build_lead_agent(
                     model,
-                    [calculate, list_files, read_text, write_text],
+                    tools,
                     self.checkpointer,
-                    context_schema=WorkspaceContext,
+                    context_schema=AgentRunContext if p04 else WorkspaceContext,
+                    state_schema=P04AgentState if p04 else None,
+                    prompt_suffix=(
+                        " For complex tasks use write_todos and keep the complete plan updated. Simple questions need no plan."
+                        if p04
+                        else ""
+                    ),
                 )
             else:
                 # 旧单轮路径及无Workspace的局部Fake注入保持原工具范围。
@@ -147,6 +170,7 @@ class RunService:
                     event_sink=lambda kind, payload: self._emit(run.id, kind, payload),
                     on_graph_start=mark_graph_started,
                     context=context,
+                    initial_state_extra={"todos": []} if self.plans else None,
                 )
             # 3. 只有有效的本轮最终消息才能写入 SUCCEEDED。
             await self._emit(run.id, "assistant_final", {"answer": response.answer})

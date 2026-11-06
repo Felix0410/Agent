@@ -55,6 +55,24 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 CREATE INDEX IF NOT EXISTS ix_artifacts_thread ON artifacts(thread_id,created_at,id);
 
+CREATE TABLE IF NOT EXISTS run_todos (
+    run_id TEXT NOT NULL REFERENCES runs(id), todo_id TEXT NOT NULL,
+    title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 120),
+    status TEXT NOT NULL CHECK(status IN ('pending','in_progress','completed')),
+    position INTEGER NOT NULL CHECK(position BETWEEN 0 AND 7), updated_at TEXT NOT NULL,
+    PRIMARY KEY(run_id,todo_id), UNIQUE(run_id,position)
+);
+CREATE TABLE IF NOT EXISTS subtasks (
+    id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL REFERENCES runs(id),
+    thread_id TEXT NOT NULL REFERENCES threads(id),
+    agent_type TEXT NOT NULL CHECK(agent_type IN ('general','research')),
+    description TEXT NOT NULL CHECK(length(description) BETWEEN 1 AND 1000),
+    todo_id TEXT, status TEXT NOT NULL CHECK(status IN ('PENDING','RUNNING','COMPLETED','FAILED','CANCELLED','TIMED_OUT')),
+    result_summary TEXT, error_code TEXT, source_file_ids_json TEXT NOT NULL DEFAULT '[]',
+    truncated INTEGER NOT NULL DEFAULT 0 CHECK(truncated IN (0,1)),
+    created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_subtasks_run ON subtasks(run_id,created_at,id);
 """
 
 

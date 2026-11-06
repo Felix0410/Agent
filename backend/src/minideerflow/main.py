@@ -9,11 +9,14 @@ from fastapi import FastAPI
 from minideerflow.api.demo import router
 from minideerflow.api.files import router as files_router
 from minideerflow.api.runs import router as runs_router
+from minideerflow.api.tasks import router as tasks_router
 from minideerflow.api.threads import router as threads_router
 from minideerflow.config import get_settings
 from minideerflow.runtime.checkpoints import open_checkpointer
 from minideerflow.runtime.db import RuntimeDatabase
 from minideerflow.runtime.events import EventBus
+from minideerflow.runtime.plan_repository import PlanRepository
+from minideerflow.runtime.plan_service import PlanService
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.runner import RunService
 from minideerflow.workspace.repository import WorkspaceRepository
@@ -38,6 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.database = database
         app.state.checkpointer = saver
         app.state.repository = repository
+        app.state.plans = PlanRepository(database)
         storage = WorkspaceStorage(settings.workspace_root_path)
         storage.open()
         stack.callback(storage.close)
@@ -48,7 +52,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stack.push_async_callback(events.shutdown)
         app.state.events = events
         runner = RunService(
-            repository, saver, settings, events=events, workspace=app.state.workspace
+            repository,
+            saver,
+            settings,
+            events=events,
+            workspace=app.state.workspace,
+            plans=PlanService(app.state.plans),
         )
         runner.start()
         stack.push_async_callback(runner.shutdown)
@@ -64,6 +73,7 @@ def create_app() -> FastAPI:
     app.include_router(threads_router)
     app.include_router(runs_router)
     app.include_router(files_router)
+    app.include_router(tasks_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
