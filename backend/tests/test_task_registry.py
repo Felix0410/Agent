@@ -133,3 +133,38 @@ def test_budget_bounds(field, value):
 
     with pytest.raises(ValidationError):
         Settings(**{field: value})
+
+
+def test_repeated_parent_cancel_waits_for_child_cleanup():
+    """超时后又关闭worker时，第二次取消不能打断尚未完成的子任务清理。"""
+
+    async def scenario():
+        registry = TaskRegistry()
+        entered = asyncio.Event()
+        cleaning = asyncio.Event()
+        release = asyncio.Event()
+        finished = asyncio.Event()
+
+        async def work(sem):
+            async with sem:
+                entered.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cleaning.set()
+                    await release.wait()
+                    finished.set()
+
+        parent = asyncio.create_task(registry.run("run", work))
+        await entered.wait()
+        parent.cancel()
+        await cleaning.wait()
+        parent.cancel()
+        closing = asyncio.create_task(registry.close_run("run"))
+        await asyncio.sleep(0)
+        assert not parent.done() and not finished.is_set()
+        release.set()
+        await asyncio.gather(parent, closing, return_exceptions=True)
+        assert finished.is_set() and registry._runs == {}
+
+    asyncio.run(scenario())

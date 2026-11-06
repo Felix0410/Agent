@@ -6,6 +6,20 @@ from dataclasses import dataclass, field
 from minideerflow.runtime.plan_repository import PlanError
 
 
+async def _drain(tasks):
+    """重复取消也先等待所有清理完成，再向调用方传播取消。"""
+    group = asyncio.gather(*tasks, return_exceptions=True)
+    interrupted = False
+    while not group.done():
+        try:
+            await asyncio.shield(group)
+        except asyncio.CancelledError:
+            # 超时取消期间又收到服务关闭，不能让第二次取消打断 child 落库。
+            interrupted = True
+    if interrupted:
+        raise asyncio.CancelledError
+
+
 @dataclass
 class _RunTasks:
     semaphore: asyncio.Semaphore
@@ -42,7 +56,7 @@ class TaskRegistry:
             # 2. 父取消必须等 child 的 SQL 清理结束，再继续父终态处理。
             if not work.done() and not work.cancelling():
                 work.cancel()
-            await asyncio.gather(work, return_exceptions=True)
+            await _drain([work])
             raise
         finally:
             state.tasks.discard(work)
@@ -56,8 +70,10 @@ class TaskRegistry:
         for task in tuple(state.tasks):
             if not task.done() and not task.cancelling():
                 task.cancel()
-        await asyncio.gather(*tuple(state.tasks), return_exceptions=True)
-        self._runs.pop(run_id, None)
+        try:
+            await _drain(tuple(state.tasks))
+        finally:
+            self._runs.pop(run_id, None)
 
     async def shutdown(self):
         """先停止准入，再回收所有 Run 的任务句柄。"""

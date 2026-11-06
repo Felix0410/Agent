@@ -193,3 +193,88 @@ def test_identity_and_inputs(tmp_path):
         "description",
         "todo_id",
     }
+
+
+def test_four_calls_including_failures_and_sql_survives_event_failure(tmp_path):
+    """限额包含失败；SSE故障不反转已提交任务状态。"""
+
+    async def scenario():
+        async with workspace(tmp_path) as (ws, repo, _):
+            thread = await repo.create_thread()
+            run = await active_run(repo, thread)
+            plans = PlanRepository(repo.database)
+            count = 0
+
+            def factory():
+                nonlocal count
+                count += 1
+                return ScriptedModel(responses=[AIMessage(content="")])
+
+            async def bad_sink(kind, payload):
+                raise RuntimeError("synthetic unavailable")
+
+            dispatcher = TaskDispatcher(plans, factory)
+            ctx = AgentRunContext(thread.id, run.id, ws, PlanService(plans), bad_sink, dispatcher)
+            for _ in range(4):
+                assert (await dispatcher.dispatch(ctx, "general", "goal")).status == "FAILED"
+            with pytest.raises(PlanError, match="SUBTASK_LIMIT"):
+                await dispatcher.dispatch(ctx, "general", "fifth")
+            assert count == 4 and len(await plans.list_subtasks(run.id)) == 4
+            await dispatcher.registry.close_run(run.id)
+
+    asyncio.run(scenario())
+
+
+def test_parent_permission_intersection_and_forged_tool_args(tmp_path, monkeypatch):
+    async def scenario():
+        from minideerflow.agents.subagents import executor
+
+        original = executor.create_agent
+
+        def capture(model, tools, **kwargs):
+            assert {t.name for t in tools} == {"list_files"}
+            return original(model, tools, **kwargs)
+
+        monkeypatch.setattr(executor, "create_agent", capture)
+        async with workspace(tmp_path) as (ws, repo, _):
+            thread = await repo.create_thread()
+            run = await active_run(repo, thread)
+            plans = PlanRepository(repo.database)
+            dispatcher = TaskDispatcher(
+                plans, lambda: ScriptedModel(responses=[AIMessage(content="ok")])
+            )
+            ctx = AgentRunContext(
+                thread.id,
+                run.id,
+                ws,
+                PlanService(plans),
+                task_dispatcher=dispatcher,
+                allowed_tools=("list_files",),
+            )
+            assert (await dispatcher.dispatch(ctx, "general", "goal")).status == "COMPLETED"
+            parent = ScriptedModel(
+                responses=[
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "forged",
+                                "name": "task",
+                                "args": {
+                                    "agent_type": "general",
+                                    "description": "goal",
+                                    "thread_id": thread.id,
+                                },
+                            }
+                        ],
+                    ),
+                    AIMessage(content="rejected"),
+                ]
+            )
+            async with open_checkpointer(tmp_path / "parent.db") as saver:
+                graph = build_lead_agent(parent, [task], saver, context_schema=AgentRunContext)
+                result = await stream_agent(graph, thread.id, "test", context=ctx)
+                assert not result.tool_calls[0].ok
+            assert len(await plans.list_subtasks(run.id)) == 1
+
+    asyncio.run(scenario())

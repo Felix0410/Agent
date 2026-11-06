@@ -139,3 +139,50 @@ def test_parallel_commands_all_rejected(tmp_path):
 
 def test_schema():
     assert set(write_todos.tool_call_schema.model_json_schema()["properties"]) == {"items"}
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        item(status="unknown"),
+        item(title=""),
+        item(todo_id="../bad"),
+        item(title="x" * 121),
+        {**item(), "thread_id": "forged"},
+    ],
+)
+def test_input_schema_rejects_invalid_fields(data):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        TodoInput(**data)
+
+
+def test_todo_snapshot_remains_when_event_transport_fails(tmp_path):
+    async def scenario():
+        async with workspace(tmp_path) as (ws, repo, _):
+            thread = await repo.create_thread()
+            run = await active_run(repo, thread)
+            plans = PlanRepository(repo.database)
+
+            async def broken(kind, payload):
+                raise RuntimeError("unavailable")
+
+            ctx = AgentRunContext(thread.id, run.id, ws, PlanService(plans), broken)
+            saved = await ctx.todo_service.write_todos(
+                ctx,
+                [TodoInput(**item())],
+                {
+                    "messages": [
+                        AIMessage(
+                            content="",
+                            tool_calls=[
+                                {"id": "plan", "name": "write_todos", "args": {"items": [item()]}}
+                            ],
+                        )
+                    ]
+                },
+            )
+            assert saved[0]["todo_id"] == "one" and len(await plans.list_todos(run.id)) == 1
+
+    asyncio.run(scenario())

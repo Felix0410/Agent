@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P01–P03 代码已在各自分支实现；P02/P03 仍为 PENDING_REVIEW，未得到用户最终手动验收结论。P04 Todo/Sub-Agent 已设计并写入开发分支，目前仅 PLAN_READY、尚未编码。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P01–P03 代码已在各自分支实现；P02/P03 仍为 PENDING_REVIEW，未得到用户最终手动验收结论。P04 Todo/Sub-Agent 已实现并局部验证，状态 PENDING_REVIEW。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -40,7 +40,7 @@
 | [代码可读性与 Codex 规则](AGENTS.md) | 中文注释、复杂逻辑编号分段、只测本次变更、同步前端 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
-**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次新增用户可见功能同步 Web 验证台。P02/P03 已交付而用户手动验收未在此确认；P04 已完成设计（不算实现），按 A→B→C→D 逐项落实真实代码、局部测试和提交，关键失败停止。未经用户明确启动编码，不将设计文档状态当作 P04 运行成果。
+**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次新增用户可见功能同步 Web 验证台。P02/P03 已交付而用户手动验收未在此确认；P04 已按 A→B→C→D 分别实施、局部测试和提交，等待用户手动验收，不进入 P05。
 
 ## P00 本地开发
 
@@ -210,7 +210,7 @@ curl http://127.0.0.1:8000/api/threads/THREAD_ID/artifacts
 curl --get --data-urlencode 'thread_id=THREAD_ID' http://127.0.0.1:8000/api/artifacts/ARTIFACT_ID -o summary.md
 ```
 
-文件系统与SQLite没有联合事务：登记前失败清理本次UUID；提交边界取消会等待事务确定结果，已提交上传精确补偿，已提交Artifact即使Run后续FAILED也保留可下载。提交结果不可确认时仅尽力清理，可能保留不公开的孤立文件；API不会扫描磁盘将孤立文件当成资源。没有删除、覆盖、Shell、RAG、PDF解析、多租户权限或P04能力。仅本机单用户运行，不宣称可以抵御能任意修改本进程数据目录的同OS用户。
+文件系统与SQLite没有联合事务：登记前失败清理本次UUID；提交边界取消会等待事务确定结果，已提交上传精确补偿，已提交Artifact即使Run后续FAILED也保留可下载。提交结果不可确认时仅尽力清理，可能保留不公开的孤立文件；API不会扫描磁盘将孤立文件当成资源。没有删除、覆盖、Shell、RAG、PDF解析、多租户权限。P04能力见下节。仅本机单用户运行，不宣称可以抵御能任意修改本进程数据目录的同OS用户。
 
 真实验证：A局部78 passed，B局部111 passed，C最终214 passed、0 failed；不将重叠测试数相加。Ruff、uv锁一致性、TypeScript/Vite构建通过。最终局部命令（backend/）：
 
@@ -225,12 +225,52 @@ Fake/临时资源覆盖安全路径、上传配额、Context与ToolMessage、跨
 当前实测平台为macOS；其它POSIX平台和PyCharm GUI断点未直接验证，能力缺失会fail closed。完整重启/故障注入用Fake验证，没有额外使用真实模型注入故障。开发Smoke使用独立端口/临时两库与Workspace，完成后关闭并清理；用户原8000服务未停止，验收时请自行重启以加载新代码。详细文件、SHA、命令及推送结果见 [P03进度](docs/progress/P03.md)。
 
 
-## P04 Todo 与 Sub-Agent（正式设计，尚未编码）
+## P04 Todo 与 Sub-Agent（PENDING_REVIEW）
 
-[开发设计](docs/DEVELOPMENT.md) 和 [逐文件 Codex 任务书](docs/tasks/P04-ABCD.md) 已完成并在 `feat/p04-planning-subagents` 分支提交。
+已按 [正式设计](docs/DEVELOPMENT.md) 和 [A/B/C/D合同](docs/tasks/P04-ABCD.md) 实现；P02/P03的待审核状态保持。模型按复杂度选择 `write_todos` 和 `task`，普通问答/计算不强制规划。
 
-目标：Lead Agent 根据任务复杂度选择是否用 `write_todos` 建立真实结构化计划，再调用 `task` 将子任务交给 `general` 或 `research`。每个 child 独立消息上下文、无父 Checkpointer、不可二次委派；`general` 仅用 calculate/list_files/read_text，`research` 仅用已上传文件 list_files/read_text（**不代表可以联网搜索**）。父 Run 最多同时 3 个子代理、累计 4 次委派；父 Agent 可以用已实现的 P03 write_text 生成下载产物。
+- Todo同时写真实LangGraph State/Checkpoint和每Run SQLite完整快照；同ID覆盖，最多8条，不允许删除旧ID或从completed回退，同一步多个write_todos全部拒绝。下一Run重置Graph.todos，历史SQL保留。
+- `general`只有calculate/list_files/read_text，`research`只有list_files/read_text（**仅已有材料，无联网**）。每child独立messages、checkpointer=None，无父完整历史，无task/write_todos/write_text；Lead可汇总后用write_text生成Artifact。
+- 每父Run最多3并发、4次委派；child默认35秒/14个图节点步，父持久Run150秒/36个图节点步。P01独立单轮仍45秒/12步。次数包含失败/超时；超时、取消与关闭先回收child，再终结父Run。次数/并发可降低，不能提高合同上限。
+- Subtask真实状态持久化：PENDING/RUNNING→COMPLETED/FAILED/TIMED_OUT/CANCELLED；未启动取消为FAILED。重启遗留任务标FAILED/SUBTASK_INTERRUPTED，不自动重放。子任务完成只认实际最终消息/成功工具回执，文件来源只认真实read_text，不相信模型自报UUID。
+- 子任务最多1600字符摘要，截断明确标记；完整子对话/Token不拼回父图。Todo/Task页面从真实SSE更新，Run结束/断流/缺口/刷新/重启GET补齐，切换会话不串记录。
 
-设计新增 Run Todo 与 Subtask SQLite 快照、真实状态 SSE、历史只读接口 `GET /api/runs/{run_id}/todos` 和 `GET /api/runs/{run_id}/subtasks`，前端计划展示 TodoPanel 和 TaskPanel。A→B→C→D 分别实现并在每个子任务完成时同步前端、局部测试和 Git SHA；原有 P01 单轮 Demo、P02 SSE/Checkpoint 与 P03 文件/Artifact 必须保留。
+新增只读接口（不提供前端写计划或手动派发API）：
 
-**P04 目前只有设计，没有新增业务代码、构建或模型测试结果**；进度参见 [P04 状态](docs/progress/P04.md)。P02/P03 保留各自 PENDING_REVIEW，不自动启动 P05。
+```text
+GET /api/runs/{run_id}/todos
+GET /api/runs/{run_id}/subtasks
+```
+
+未知Run返回404，无计划/委派返回空数组。沿用P02的SSE接口，新增todo_updated/subtask_created/subtask_started/subtask_completed/subtask_failed；事件窗口过期不影响SQL历史。Todo的SQL与Graph Checkpoint仍是两个库，没有跨库原子事务；SQL已提交而图后续失败时保留SQL，父Run按P02保守恢复策略处理。
+
+启动方式保持：
+
+```bash
+# 在 backend/ 执行
+uv sync --locked --group dev
+uv run python src/minideerflow/main.py
+# 另一个终端，在 frontend/ 执行
+npm ci
+npm run dev
+```
+
+PyCharm解释器用`backend/.venv/bin/python`，入口`backend/src/minideerflow/main.py`，工作目录`backend`，无参数。根目录已有.env会自动读取，无须改.env即可使用P04默认预算；修改配置/更新代码后重启后端。GUI断点待人工验证。
+
+手动Demo：新建会话→上传一份UTF-8 notes.md→发送“先写Todo，将文档核心观点和风险分别委派general/research读取分析，再创建summary.md并更新计划”。检查Todo、两条真实Task和来源文件ID、下载产物；刷新与切换会话后应恢复各自历史。模型可能选择其它执行顺序，实际任务状态与工具轨迹才是执行证据。
+
+本轮局部验证（在backend/执行）：
+
+```bash
+uv lock --check
+uv sync --locked --group dev
+uv run ruff check src tests
+uv run ruff format --check src tests
+uv run pytest -q tests/test_planning_demo.py tests/test_todos.py tests/test_subagents.py tests/test_task_registry.py tests/test_tasks_api.py tests/test_config.py tests/test_repository.py tests/test_checkpoint.py tests/test_runner.py tests/test_runs_api.py tests/test_lead.py tests/test_demo_api.py tests/test_health.py tests/test_events.py tests/test_calculator.py tests/test_file_tools.py tests/test_workspace.py tests/test_files_api.py
+```
+
+最终 **253 passed，0 failed**，仅P04与直接受影响P01–P03消费者；Ruff/前端TypeScript+Vite构建通过。Fake使用临时两库/Workspace覆盖完整文件任务、重启、失败、并发与取消；ego-browser实际UI验证历史恢复及下载。
+
+真实模型deepseek-flash独立验证：3项Todo、general/research两次实际task、真实文件读取、summary.md落盘下载、刷新/跨会话隔离均通过。复杂Run约15.80秒、12次模型调用、19,797 tokens；另测普通问候/实际calculate=60，不产生Todo/Task。本轮真实验证合计15次模型调用、30,823 tokens（提供方usage，未获得实际账单金额）。真模型与Fake结果分别记录，不以模型宣称代替工具证据。
+
+Smoke使用隔离8004后端/5174 Vite与合成文档；测试服务已关闭，临时库/Workspace已清理，未动用户原服务和本地.env。实际模型跨进程重启、故障注入由Fake覆盖；其它OS和PyCharm GUI尚未直接验证。完整SHA/测试命令/推送结果见 [P04进度](docs/progress/P04.md)。等待用户手动验收，不合并main、不进入P05。
