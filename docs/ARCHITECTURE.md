@@ -1,7 +1,7 @@
 # 总体业务与系统架构（正式方案）
 
-**版本**：v1.5 · 2026-11-06
-**状态**：V1 总体架构确定；P01–P04 已在各自开发分支实现，P02/P03/P04 仍待用户手动验收；P05 ToolRegistry/MCP/Skills 已实现并局部验证，**P05 为 PENDING_REVIEW**。实际进度以 [DEVELOPMENT.md](DEVELOPMENT.md) 和 `docs/progress/` 为准。
+**版本**：v1.6 · 2026-11-06
+**状态**：V1 总体架构确定；P01–P05 已有真实实现，P02–P05 仍待用户手动验收；P06 预算/上下文压缩/取消与恢复已完成逐文件方案，**P06 业务代码尚未开发（PLAN_READY）**。实际进度以 [DEVELOPMENT.md](DEVELOPMENT.md) 和 `docs/progress/` 为准。
 **参考基线**：[DeerFlow 2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，commit `7e7f0410797693cf882594555ba414e0361d4c6f`。本项目自行实现，不 Fork 原项目。
 
 ## 1. 目标与边界
@@ -140,6 +140,16 @@ P05 在现有 P04 Lead `create_agent` 工具列表与 LangChain ToolNode 之间�
 MCP 最初仅连接用户明确启用的、在单机回环地址运行、无副作用的 Streamable HTTP Server，工具名字/参数 Schema/说明经白名单和 SHA256 指纹双重批准；**默认完全禁用**。示例 Server 只提供确定性 `lookup_fact` 以验证真实工具协议，不能据此宣称已经具备外网 Deep Research。连接失败不影响 builtin；MCP 服务器本身必须可信，客户端不能单靠 readOnlyHint 强制它只读。
 
 Skills 初期是版本管理的 `backend/skills/public/<name>/SKILL.md`：安全解析 YAML、发现简介、按需用 `list_skills/read_skill` 读取单篇正文；内容只作为模型的工具结果，不能提升权限或装载任意本地程序。React 只增加只读 CapabilityPanel 和 `GET /api/tools`、`GET /api/skills`，在原有 RunStatus 中观察实际 ToolCall/ToolTrace。已锁定mcp1.30.0/adapters0.3.2/PyYAML6.0.3；MCP断连只收回授权，不影响内置工具，恢复需重启。Fake、真实模型、浏览器与测试结果见[阶段进度](progress/P05.md)。具体见 [P05 正式合同](DEVELOPMENT.md) 和 [P05-A/B/C/D Codex 任务书](tasks/P05-ABCD.md)。
+
+### 3.6 P06 上下文预算、Usage 与取消协议（设计态）
+
+P06 不替换 P05 `ToolGuardMiddleware` 或 P04 `create_agent`，而是通过官方 `AgentMiddleware` 在模型/ToolCall 周围添加共享 RunBudgetTracker（父+子Agent+摘要模型）、SQLite Usage 数据记录和旧消息安全压缩。**模型提供方的真实 token 用量**与基于字符/字节的估算必须分列存储和展示，不计算未经提供方确认的实际账单。旧消息摘要不会修改 P02 业务历史记录，只在 LangGraph Checkpoint 中更新受控的消息列表，保留当前目标、Todo、完整 ToolCall/ToolMessage 配对与真实 File/Artifact 引用。
+
+超过12KiB的成功纯文本工具输出在进入模型之前保留安全1KiB预览+已登记file_id或Artifact引用，不把同一原始已上传文件无意义地再复制一份；无法持久登记则显式错误，不能偷偷丢数据。P05 `write_todos` 的 `Command` 不受外置策略影响。
+
+当前 SQLite `runs.status` 已允许 CANCELLED，但不支持 CANCELLING，P06 **不重建状态表**：以 `cancel_requested_at` 持久标记“请求取消中”，而非提前改变终态。CREATED 可直接 CANCELLED 并由队列跳过；RUNNING 取消仅终止当前独立 Graph Task，并在 P04 Child 与 Workspace/SQLite 归档后转 CANCELLED；外部副作用结果不可确认时 FAILED/OUTCOME_UNKNOWN 与 Thread 保守恢复。后端 Run 时限升至600秒时，前端轮询必须相应升至720秒，SSE 断线只断订阅、不取消 Run。
+
+API 增 `GET /api/runs/{run_id}/usage` 与 `POST /api/runs/{run_id}/cancel`，Web 增 `UsagePanel`/取消按钮，继承全部 Thread/Run/Todo/Task/Artifact/MCP/Skill 行为。具体文件/状态规则参见 [P06 详细设计](DEVELOPMENT.md) 和 [P06-A/B/C/D Codex 执行合同](tasks/P06-ABCD.md)。
 
 ## 4. 模块职责与接口
 
