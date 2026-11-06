@@ -1,3 +1,4 @@
+import CapabilityPanel from "./components/CapabilityPanel";
 import { useEffect, useRef, useState } from "react";
 import { request } from "./api";
 import ThreadList from "./components/ThreadList";
@@ -212,6 +213,7 @@ export default function App() {
         )}
       </section>
 
+      <CapabilityPanel />
       <footer>
         当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02 会话记忆 / 后台 Run /
         SSE。P03 上传 / 文件工具 / Artifact。P04 Todo / 只读子代理委派（research

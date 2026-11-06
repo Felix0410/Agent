@@ -12,6 +12,8 @@ class AgentRunContext(WorkspaceContext):
     event_sink: Any = None
     task_dispatcher: Any = None
     allowed_tools: tuple[str, ...] = ("calculate", "list_files", "read_text", "write_text")
+    tool_policy: Any = None
+    skill_service: Any = None
 
 
 @dataclass(frozen=True)

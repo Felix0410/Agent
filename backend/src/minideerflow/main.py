@@ -6,6 +6,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 
+from minideerflow.api.capabilities import router as capabilities_router
 from minideerflow.api.demo import router
 from minideerflow.api.files import router as files_router
 from minideerflow.api.runs import router as runs_router
@@ -20,6 +21,7 @@ from minideerflow.runtime.plan_service import PlanService
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.runner import RunService
 from minideerflow.runtime.task_registry import TaskRegistry
+from minideerflow.tools.registry import ToolRegistry, register_builtin_tools
 from minideerflow.workspace.repository import WorkspaceRepository
 from minideerflow.workspace.service import WorkspaceService
 from minideerflow.workspace.storage import WorkspaceStorage
@@ -58,6 +60,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         app.state.task_registry = registry
         stack.push_async_callback(registry.shutdown)
+        tool_registry = ToolRegistry()
+        register_builtin_tools(tool_registry)
+        tool_registry.freeze()
+        app.state.tool_registry = tool_registry
         runner = RunService(
             repository,
             saver,
@@ -66,6 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             workspace=app.state.workspace,
             plans=PlanService(app.state.plans),
             task_registry=registry,
+            tool_registry=tool_registry,
         )
         runner.start()
         stack.push_async_callback(runner.shutdown)
@@ -82,6 +89,7 @@ def create_app() -> FastAPI:
     app.include_router(runs_router)
     app.include_router(files_router)
     app.include_router(tasks_router)
+    app.include_router(capabilities_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

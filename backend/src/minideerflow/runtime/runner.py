@@ -21,9 +21,9 @@ from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.streaming import stream_agent
 from minideerflow.runtime.task_registry import TaskRegistry
 from minideerflow.tools.calculator import calculate
+from minideerflow.tools.executor import ToolGuardMiddleware
 from minideerflow.tools.file_tools import list_files, read_text, write_text
-from minideerflow.tools.task_tool import task
-from minideerflow.tools.todo_tool import write_todos
+from minideerflow.tools.registry import ToolPolicy, ToolRegistry, register_builtin_tools
 from minideerflow.workspace.models import WorkspaceContext
 from minideerflow.workspace.service import WorkspaceService
 
@@ -52,10 +52,16 @@ class RunService:
         workspace: WorkspaceService | None = None,
         plans: PlanService | None = None,
         task_registry: TaskRegistry | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self.task_registry = task_registry or TaskRegistry(
             settings.max_subagent_concurrency, settings.max_subagent_calls_per_run
         )
+        if tool_registry is None:
+            tool_registry = ToolRegistry()
+            register_builtin_tools(tool_registry)
+            tool_registry.freeze()
+        self.tool_registry = tool_registry
         self.plans = plans
         self.events = events
         self.workspace = workspace
@@ -152,6 +158,13 @@ class RunService:
                         timeout=self.settings.subagent_timeout_seconds,
                         recursion_limit=self.settings.subagent_recursion_limit,
                     )
+                    policy = ToolPolicy(
+                        run.id,
+                        run.thread_id,
+                        self.tool_registry.names,
+                        frozenset({"read", "write", "orchestrate"}),
+                    )
+                    tools = self.tool_registry.list_allowed(policy)
                     context = AgentRunContext(
                         run.thread_id,
                         run.id,
@@ -159,14 +172,16 @@ class RunService:
                         self.plans,
                         lambda kind, payload: self._emit(run.id, kind, payload),
                         dispatcher,
+                        allowed_tools=tuple(t.name for t in tools),
+                        tool_policy=policy,
                     )
-                    tools.extend([write_todos, task])
                 agent = build_lead_agent(
                     model,
                     tools,
                     self.checkpointer,
                     context_schema=AgentRunContext if p04 else WorkspaceContext,
                     state_schema=P04AgentState if p04 else None,
+                    middleware=[ToolGuardMiddleware(self.tool_registry)] if p04 else None,
                     prompt_suffix=(
                         " For complex tasks use write_todos and keep the complete plan updated. Use task to delegate focused goals to general/research (existing material only, no internet). Child agents cannot write files; use write_text yourself for a final artifact. Report failures honestly. Simple questions need no plan or delegation."
                         if p04

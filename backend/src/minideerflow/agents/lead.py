@@ -14,11 +14,13 @@ def build_lead_agent(
     context_schema: type | None = None,
     state_schema: type | None = None,
     prompt_suffix: str = "",
+    middleware: list | None = None,
 ):
     """使用 LangChain 原生 Agent 组装模型、工具与系统提示词。"""
     # Agent 循环由 create_agent 执行，不在项目中另写固定流程图或 while 循环。
     return create_agent(
         model=model,
+        middleware=middleware or [],
         tools=tools,
         checkpointer=checkpointer,
         context_schema=context_schema,
