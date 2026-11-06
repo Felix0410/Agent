@@ -4,6 +4,7 @@ import codecs
 import hashlib
 import os
 import stat
+import unicodedata
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,7 +49,11 @@ class WorkspaceStorage:
         required = (os.open, os.mkdir, os.stat, os.link, os.unlink)
         if (
             os.name != "posix"
-            or not hasattr(os, "O_NOFOLLOW")
+            or not all(
+                hasattr(os, flag)
+                for flag in ("O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK", "O_CLOEXEC")
+            )
+            or os.link not in os.supports_follow_symlinks
             or any(function not in os.supports_dir_fd for function in required)
         ):
             raise WorkspaceError(
@@ -163,8 +168,11 @@ class WorkspaceStorage:
                 if size > limit:
                     raise WorkspaceError("FILE_TOO_LARGE", "File exceeds the permitted size", 413)
                 if mime != "application/pdf":
-                    decoder.decode(chunk, final=False)
-                    if b"\x00" in chunk:
+                    decoded = decoder.decode(chunk, final=False)
+                    if any(
+                        unicodedata.category(char) == "Cc" and char not in "\t\r\n"
+                        for char in decoded
+                    ):
                         raise WorkspaceError(
                             "INVALID_FILE_CONTENT", "Text contains binary data", 422
                         )
@@ -184,7 +192,7 @@ class WorkspaceStorage:
             # 2. fsync 后用 link 原子无覆盖发布；目标即使同时存在也必须失败。
             os.fsync(file_fd)
             info = os.fstat(file_fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != size:
                 raise WorkspaceError("INVALID_FILE_PATH", "Unsafe file object", 422)
             self._assert_location(thread_id, directory)
             os.link(
@@ -195,6 +203,15 @@ class WorkspaceStorage:
             temporary_created = False
             os.fsync(directory)
             self._assert_location(thread_id, directory)
+            # 发布目标必须仍是写入fd对应的常规文件，不能链接到被替换的临时目录项。
+            target = os.stat(key, dir_fd=directory, follow_symlinks=False)
+            written = os.fstat(file_fd)
+            if (
+                not stat.S_ISREG(target.st_mode)
+                or target.st_nlink != 1
+                or (target.st_dev, target.st_ino) != (written.st_dev, written.st_ino)
+            ):
+                raise WorkspaceError("INVALID_FILE_PATH", "Published file changed", 422)
             record = FileRecord(
                 id=str(uuid4()),
                 thread_id=thread_id,

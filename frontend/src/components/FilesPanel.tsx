@@ -26,8 +26,10 @@ export default function FilesPanel({
   const version = useRef(0);
 
   async function refresh() {
+    // 1. 同一Thread也可能因Run结束而刷新；版本号拒绝更早的返回结果。
     const ticket = ++version.current;
     setLoading(true);
+    setError("");
     try {
       const [records, registered] = await Promise.all([
         listFiles(threadId),
@@ -57,7 +59,7 @@ export default function FilesPanel({
     setBusy(true);
     setError("");
     try {
-      // 成功响应只包含已安全落盘并登记的资源，不按原文件名猜测磁盘位置。
+      // 2. 成功响应只包含已安全落盘并登记的资源，不按原文件名猜测磁盘位置。
       await uploadFile(threadId, selected);
       if (alive.current) await refresh();
     } catch (reason) {
@@ -67,6 +69,7 @@ export default function FilesPanel({
     }
   }
   async function download(artifact: ArtifactRecord) {
+    // 3. 只下载当前Thread已登记的产物ID；切换后不触发旧会话的浏览器保存。
     setDownloading(artifact.artifact_id);
     setError("");
     try {
@@ -112,8 +115,9 @@ export default function FilesPanel({
       <ul>
         {files.map((file) => (
           <li key={file.id}>
-            <strong>{file.display_name}</strong> · {file.size_bytes} bytes ·{" "}
-            {file.mime}
+            <strong>{file.display_name}</strong> ·{" "}
+            {file.kind === "UPLOAD" ? "上传" : "产物"} · {file.size_bytes} bytes
+            · {file.mime}
             {file.mime === "application/pdf" && (
               <span>（仅存储，暂不解析）</span>
             )}

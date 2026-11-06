@@ -175,3 +175,11 @@ class WorkspaceRepository:
             if row is None:
                 raise WorkspaceError("ARTIFACT_NOT_FOUND", "Artifact not found", 404)
             return ArtifactRecord(**dict(row))
+
+    async def discard_upload(self, file: FileRecord) -> None:
+        """只补偿本次已知UUID/内部键上传，不删除产物或其它资源。"""
+        async with self.database.transaction() as conn:
+            await conn.execute(
+                "DELETE FROM files WHERE id=? AND storage_key=? AND thread_id=? AND kind='UPLOAD' AND run_id IS NULL",
+                (file.id, file.storage_key, file.thread_id),
+            )

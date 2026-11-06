@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P01/P02 后端和 React 代码已实现；P02 仍为 PENDING_REVIEW，尚未在此确认用户手动验收。P03 Workspace / File Tools / Artifact 已启动并完成详细设计，目前仅 PLAN_READY、业务代码尚未实现。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P03 A/B/C 已实现并验证，P03 为 PENDING_REVIEW，等待用户手动测试。P02 仍保留 PENDING_REVIEW，未开始 P04。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -179,23 +179,46 @@ B 72 passed；C 94 passed；D最终136 passed（0 failed）。每一部分分别
 
 真实模型独立Smoke：deepseek-flash，临时两库，三次HTTP202、SSE200、GET Run均SUCCEEDED。首轮记住测试口令、第二轮正确回答 Cedar-482；第三轮实际calculate(expression="(12+8)*3")返回60，SSE的tool_start/tool_end ID匹配，三轮收到真实文本增量。未记录密钥/认证头/模型隐藏内容；真实模型的重启后记忆和故障注入仅通过Fake覆盖，未额外消费额度。
 
-PyCharm GUI断点和用户最终Demo验收待人工完成。开发使用的临时Fake/真实Smoke服务不是正常启动配置；完成后会关闭并删除临时库，用户需自行启动后端。详细SHA、真实命令、失败修复与推送状态见 [P02进度](docs/progress/P02.md)。不合并 main；P03 已获准开始设计，P02 尚不标为已手动验收。
+PyCharm GUI断点和用户最终Demo验收待人工完成。开发使用的临时Fake/真实Smoke服务不是正常启动配置；完成后会关闭并删除临时库，用户需自行启动后端。详细SHA、真实命令、失败修复与推送状态见 [P02进度](docs/progress/P02.md)。不合并 main；P03 实现与验证见下节，P02 尚不标为已手动验收。
 
 
-## P03 Workspace 与 Artifact（设计已完成、等待代码）
+## P03 文件 Workspace 与 Artifact
 
-当前 [P03 开发方案](docs/DEVELOPMENT.md) 与 [Codex 执行清单](docs/tasks/P03-ABC.md) 仅定义**待开发**功能：当前 Thread 上传 UTF-8 TXT/MD/CSV/JSON 或原样存储 PDF；Agent 通过可信 LangChain ToolRuntime 上下文访问已登记的文件，执行 `list_files/read_text/write_text`，把生成文件登记为 Artifact 后由浏览器下载；文件系统以不跟随符号链接、UUID 存储名、文件描述符及无覆盖原子发布保证本地范围的文件访问安全。限制为文本上传 2 MiB、PDF 10 MiB、每 Thread 50 文件共 30 MiB；PDF 解析留到 P08。
+启动仍沿用上述 PyCharm + Vite：先在 `backend/` 执行 `uv sync --locked --group dev`（新增 python-multipart 0.0.33），解释器选择 **backend/.venv/bin/python**，Run/Debug `src/minideerflow/main.py`；前端 `npm ci && npm run dev`，打开 http://127.0.0.1:5173 。已有后端需重启以加载新代码；本地 `.env` 未被修改。
 
-阶段实施：P03-A 安全存储/上传/前端文件列表，P03-B File Tools/Artifact 下载/前端联动，P03-C 重启/异常测试与 Demo 收尾。**目前没有 P03 的运行成果、上传记录或通过的测试。** `docs/progress/P03.md` 用于逐任务记录真实提交及结果。P01/P02 原有功能应始终保留。
+操作闭环：新建/选择Thread → 在“会话文件”上传 `notes.md` → 会话聊天输入“读取我上传的notes.md，生成summary.md并让我下载” → 观察真实list_files/read_text/write_text轨迹 → Run结束自动刷新“实际产物” → 点击下载。刷新后仍读取真实列表；重启后的元数据、文件与Run历史保留。PDF仅存储，暂不解析；无模型时上传、列表和已有产物下载仍可用。
 
-## P03-A 文件上传（本次增量）
+| 约束 | 本期行为 |
+| --- | --- |
+| 上传类型 | UTF-8 txt/md/csv/json，最多2MiB；PDF最多10MiB，只检查基本签名并原样存储 |
+| Thread额度 | 所有已登记上传与产物合计50项、30MiB |
+| 文件工具 | list_files仅当前Thread；read_text只接受file_id，完整返回最多64KiB；write_text仅安全显示名和UTF-8文本，最多128KiB |
+| 同名 | 上传原文件可同名并存，以file_id区分；同Thread产物显示名唯一，禁止覆盖 |
+| 身份 | Thread/Run由Runner的ToolRuntime Context注入，不在模型schema中；P01单轮Agent/CLI仍只有calculate |
+| 路径 | `WORKSPACE_ROOT_PATH`默认backend/data/workspaces，内部Thread/磁盘名都由后端UUID决定，显示名不参与寻址 |
+| 下载 | 只有已登记Artifact ID + Thread归属匹配，安全fd读取后复核size/sha，再返回bytes；不使用FileResponse重新开路径 |
 
-当前Thread可上传 UTF-8 txt/md/csv/json（2MiB）或PDF（10MiB，仅存储不解析）；总50项/30MiB。`WORKSPACE_ROOT_PATH`默认backend/data/workspaces，相对路径从backend解析。实际存储只用内部UUID，显示名不参与磁盘路径。上传和文件列表不需要模型配置；本地 `.env` 保持原样。
+`WORKSPACE_ROOT_PATH` 相对路径以backend为基准，两库不能位于Workspace中。根目录及Thread目录须属于当前用户且权限0700；新文件0600。拒绝所有目录路径组件中的symlink、非预期硬链接/文件类型、目录/文件替换与哈希变化；不支持安全dir_fd/O_NOFOLLOW/no-clobber link的平台拒绝启动，不能退化为不安全路径打开。默认目录在Git忽略的backend/data下；自定义项目内路径需自行忽略，勿提交实际文件或DB。
 
-新增POST/GET `/api/threads/{thread_id}/files`；浏览器FormData字段file单文件，201返回已登记FileRecord，无宿主机路径。只支持安全POSIX本地存储，目录symlink/替换、非法内容和配额等错误会拒绝。P03-A尚无文件工具或Artifact下载；原P01/P02功能保留。
+API（以下为手工操作示例，ID换成实际返回值）：
 
-## P03-B 文件工具与产物（本次增量）
+```bash
+curl -F 'file=@notes.md' http://127.0.0.1:8000/api/threads/THREAD_ID/files
+curl http://127.0.0.1:8000/api/threads/THREAD_ID/files
+curl http://127.0.0.1:8000/api/threads/THREAD_ID/artifacts
+curl --get --data-urlencode 'thread_id=THREAD_ID' http://127.0.0.1:8000/api/artifacts/ARTIFACT_ID -o summary.md
+```
 
-持久Thread Run已接入list_files/read_text/write_text：身份来自服务端ToolRuntime，模型不传Thread/Run/真实路径。读取完整UTF-8最多64KiB，写入新文本产物最多128KiB，同名产物不覆盖。PDF只能上传存储，不能read_text。P01独立Agent/CLI仍只有calculate。
+文件系统与SQLite没有联合事务：登记前失败清理本次UUID；提交边界取消会等待事务确定结果，已提交上传精确补偿，已提交Artifact即使Run后续FAILED也保留可下载。提交结果不可确认时仅尽力清理，可能保留不公开的孤立文件；API不会扫描磁盘将孤立文件当成资源。没有删除、覆盖、Shell、RAG、PDF解析、多租户权限或P04能力。仅本机单用户运行，不宣称可以抵御能任意修改本进程数据目录的同OS用户。
 
-实际Run结束后页面刷新已登记文件和产物，提供带Thread归属的下载；Run失败前已登记的真实产物仍可下载。新GET `/api/threads/{thread_id}/artifacts` 和 `/api/artifacts/{artifact_id}?thread_id=...`；没有登录鉴权，仅限本机单用户，不是公网多租户系统。
+真实验证：A局部78 passed，B局部111 passed，C最终214 passed、0 failed；不将重叠测试数相加。Ruff、uv锁一致性、TypeScript/Vite构建通过。最终局部命令（backend/）：
+
+```bash
+uv run pytest -q tests/test_workspace.py tests/test_file_tools.py tests/test_files_api.py tests/test_config.py tests/test_repository.py tests/test_checkpoint.py tests/test_runner.py tests/test_runs_api.py tests/test_lead.py tests/test_demo_api.py tests/test_health.py tests/test_events.py tests/test_calculator.py
+uv run ruff check src tests
+uv run ruff format --check src tests
+```
+
+Fake/临时资源覆盖安全路径、上传配额、Context与ToolMessage、跨Thread、原子同名竞争、SQL回滚、取消/失败、两库+Workspace完整重开和下载校验。真实 **deepseek-flash** 另用专门临时样例，经实际浏览器上传→list/read/write→SSE与SUCCEEDED→自动产物列表→下载与刷新再下载通过；生成summary.md 576 bytes，读取内容SHA与上传登记一致，写入参数与下载字节一致。未记录密钥、原始认证头或私人文档。
+
+当前实测平台为macOS；其它POSIX平台和PyCharm GUI断点未直接验证，能力缺失会fail closed。完整重启/故障注入用Fake验证，没有额外使用真实模型注入故障。开发Smoke使用独立端口/临时两库与Workspace，完成后关闭并清理；用户原8000服务未停止，验收时请自行重启以加载新代码。详细文件、SHA、命令及推送结果见 [P03进度](docs/progress/P03.md)。

@@ -385,3 +385,172 @@ def test_forged_run_and_artifact_thread_mismatch(tmp_path):
             assert (await service.download_artifact(other.id, artifact.artifact_id))[0] == b"safe"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "regular"])
+def test_publish_source_replacement_cannot_register_wrong_inode(tmp_path, monkeypatch, replacement):
+    original = os.link
+
+    async def scenario():
+        async with workspace(tmp_path) as (service, runtime, storage):
+            thread = await runtime.create_thread()
+            outside = tmp_path / "sentinel"
+            outside.write_bytes(b"unchanged")
+
+            def swap(src, dst, **kwargs):
+                fd = kwargs["src_dir_fd"]
+                os.unlink(src, dir_fd=fd)
+                if replacement == "symlink":
+                    os.symlink(str(outside), src, dir_fd=fd)
+                else:
+                    handle = os.open(src, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=fd)
+                    try:
+                        os.write(handle, b"wrong inode")
+                    finally:
+                        os.close(handle)
+                return original(src, dst, **kwargs)
+
+            monkeypatch.setattr(os, "link", swap)
+            with pytest.raises(WorkspaceError) as error:
+                await service.upload(thread.id, Upload())
+            assert error.value.code == "INVALID_FILE_PATH"
+            assert await service.list_files(thread.id) == []
+            assert list((storage.root / thread.id).iterdir()) == []
+            assert outside.read_bytes() == b"unchanged"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("data", [b"\x01", b"\x7f", b"\xc2\x85"])
+def test_binary_controls_are_not_text(tmp_path, data):
+    async def scenario():
+        async with workspace(tmp_path) as (service, runtime, _storage):
+            thread = await runtime.create_thread()
+            with pytest.raises(WorkspaceError) as error:
+                await service.upload(thread.id, Upload(data))
+            assert error.value.code == "INVALID_FILE_CONTENT"
+
+    asyncio.run(scenario())
+
+
+def test_artifact_transaction_failure_rolls_back_both_tables(tmp_path, monkeypatch):
+    async def scenario():
+        async with workspace(tmp_path) as (service, runtime, storage):
+            thread = await runtime.create_thread()
+            run = await start_file_run(runtime, thread)
+            original = service.repository._insert_file
+
+            async def insert_then_fail(conn, file):
+                await original(conn, file)
+                raise RuntimeError("private SQL failure")
+
+            monkeypatch.setattr(service.repository, "_insert_file", insert_then_fail)
+            with pytest.raises(WorkspaceError):
+                await service.write_text(thread.id, run.id, "summary.md", "x")
+            assert (
+                await service.list_artifacts(thread.id) == []
+                and await service.list_files(thread.id) == []
+            )
+            assert list((storage.root / thread.id).iterdir()) == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("artifact", [False, True])
+def test_cancel_at_commit_boundary_is_consistent(tmp_path, monkeypatch, artifact):
+    async def scenario():
+        async with workspace(tmp_path) as (service, runtime, storage):
+            thread = await runtime.create_thread()
+            run = await start_file_run(runtime, thread)
+            committed = asyncio.Event()
+            release = asyncio.Event()
+            name = "register_artifact" if artifact else "register_upload"
+            original = getattr(service.repository, name)
+
+            async def commit_then_pause(file):
+                result = await original(file)
+                committed.set()
+                await release.wait()
+                return result
+
+            monkeypatch.setattr(service.repository, name, commit_then_pause)
+            operation = (
+                service.write_text(thread.id, run.id, "summary.md", "retained")
+                if artifact
+                else service.upload(thread.id, Upload())
+            )
+            task = asyncio.create_task(operation)
+            await asyncio.wait_for(committed.wait(), 1)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            files = await service.list_files(thread.id)
+            if artifact:
+                assert len(files) == 1
+                entries = await service.list_artifacts(thread.id)
+                assert (await service.download_artifact(thread.id, entries[0].artifact_id))[
+                    0
+                ] == b"retained"
+            else:
+                assert files == [] and list((storage.root / thread.id).iterdir()) == []
+
+    asyncio.run(scenario())
+
+
+def test_cancel_read_waits_for_fd_worker(tmp_path, monkeypatch):
+    import threading
+
+    async def scenario():
+        async with workspace(tmp_path) as (service, runtime, storage):
+            thread = await runtime.create_thread()
+            file = await service.upload(thread.id, Upload())
+            started = threading.Event()
+            release = threading.Event()
+            original = storage.read_registered
+
+            def blocking(record):
+                started.set()
+                assert release.wait(2)
+                return original(record)
+
+            monkeypatch.setattr(storage, "read_registered", blocking)
+            task = asyncio.create_task(service.read_text(thread.id, file.id))
+            async with asyncio.timeout(2):
+                while not started.is_set():
+                    await asyncio.sleep(0.001)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert storage.read_registered(file) == b"hello"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("capability", ["dir_fd", "link_nofollow", "flags"])
+def test_platform_without_dir_fd_fails_closed(tmp_path, monkeypatch, capability):
+    if capability == "dir_fd":
+        monkeypatch.setattr(os, "supports_dir_fd", set())
+    elif capability == "link_nofollow":
+        monkeypatch.setattr(os, "supports_follow_symlinks", set())
+    else:
+        monkeypatch.delattr(os, "O_NOFOLLOW")
+    with pytest.raises(WorkspaceError) as error:
+        WorkspaceStorage(tmp_path / "workspace").open()
+    assert error.value.code == "WORKSPACE_UNAVAILABLE"
+    assert not (tmp_path / "workspace").exists()
+
+
+def test_symlink_parent_path_fails_closed(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(WorkspaceError):
+        WorkspaceStorage(alias / "workspaces").open()
+    assert list(outside.iterdir()) == []
