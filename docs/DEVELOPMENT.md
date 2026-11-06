@@ -2,9 +2,9 @@
 
 > **代码可读性规范**：所有阶段代码同时遵循仓库根目录 [AGENTS.md](../AGENTS.md)：中文关键注释、较长逻辑按 1/2/3 分段、注释重点解释机制与边界，保持既定 API 和业务逻辑不变。每次 Codex 任务必须执行代码可读性自查。
 
-**方案版本**：v1.7 · 2026-11-06  
+**方案版本**：v1.8 · 2026-11-06  
 **当前状态**：P00 代码已在 main；P01 实现在 `feat/p01-single-agent-web` 开发分支、待用户最终验收；P02 详细方案已批准并写入 `feat/p02-runtime-web`，仅设计就绪（PLAN_READY），尚未编码。各阶段真实进度独立记录在 `docs/progress/Pxx.md`，本文件只维护计划与执行规则。  
-**原则**：从零构建 Mini DeerFlow，逐步增加能力。**每个阶段在实际开始之前，必须根据当时真实代码和上游实现重新形成当前阶段的具体实施方案，先交用户审核，再交 Codex 编码。** 一个阶段可以拆成多个小任务，Codex 每次只执行一个，完成后等待用户审核，不自动进入下一阶段。
+**原则**：从零构建 Mini DeerFlow，逐步增加能力。**每个阶段开始前，必须先核对真实代码、形成详细实施合同并由用户审核。** 默认一个子任务完成后停下等待审核；**用户于 2026-11-06 明确授权 P02 已有 A 之后的 B/C/D 一次性设计与连续执行**，因此本次按 [docs/tasks/P02-BD.md](tasks/P02-BD.md) 在同一次 Codex 会话中顺序完成 B→C→D，分阶段提交和局部测试，关键失败立即停止。该授权仅针对 P02 B/C/D，不能推导为 P03 以后阶段自动放行。
 
 ## 0. 阶段设计先行：每次只最终确定当前阶段
 
@@ -14,6 +14,7 @@
 2. **当前阶段方案设计（ChatGPT）**：按照下面的“阶段方案交付合同”，将当前阶段真正需要做的业务主线、模块接口、逐文件职责、关键机制、编码顺序、异常与测试全部定下来。发现原先分阶段规划与实际代码冲突，先解释差异、给出最小调整建议。对重要技术选择说明为什么使用它、与替代方案的差异和引入时机。
 3. **用户审核设计**：先在对话中讲清楚这阶段要做什么、每个执行文件干什么、为什么这样实现和如何验收；用户明确认可后，才将**本阶段最终可执行规格**更新到本文件对应章节并同步 GitHub。用户在 2026-11-05 已要求继续推进 P01，并追加最小 Demo 后人工测试、每任务同步前端规则；据此形成当阶段实施合同，编码完成仍需用户验收。状态为 `PLAN_READY`，**这只表示方案通过，不等于编码完成**。
 4. **Codex 按规格编码**：给 Codex 的输入严格限于当前阶段已批准的细化方案、当前阶段进度文档、必要的现有源码/测试及 1–3 个准确的上游参考文件；Codex 只编码、执行当前新增或修改内容的局部测试、提交变更。它不得自主重新规划架构、改变技术选型、扩大任务范围或开始下一阶段。
+   - **P02 B/C/D 单次批量执行例外**：用户已明确放行三个子任务连续编码，中途仍必须 B/C/D 各自真实测试和独立提交，B 未通过不可执行 C、C 未通过不可执行 D；不要再逐个等待人工作出“下一步”确认，除非出现阻塞或要求变更已批准合同。
 5. **用户审核实现**：Codex 报告真实修改、命令、局部测试结果与 SHA，更新 `docs/progress/Pxx.md` 为 `PENDING_REVIEW`；用户根据代码和执行证据决定 `ACCEPTED` 或 `BLOCKED`。通过后才能设计下一个阶段。
 
 **阶段方案交付合同**：每次开展 Pxx 之前，必须提供这些内容，且不能只列模块名：
@@ -440,7 +441,7 @@ CLI ---------------------> AgentService.run_agent_once (same path as HTTP)
 
 ### P02 — Thread / Run / SQLite Checkpoint / SSE / 极简 Web（2026-11-06 正式实施合同）
 
-**状态：PLAN_READY（用户已要求将详细设计落到 GitHub；仅完成设计，不表示代码完成）。** 以 `feat/p01-single-agent-web` 的实际代码及中文注释整理为基线。原 P02 三段概述以此四任务 A/B/C/D 细化合同为准；P03–P09 规划保持不变。不得以 P01 的 `PENDING_REVIEW` 冒充验收通过；执行 P02 前先同步并核验 P01 最新代码。
+**状态：IN_PROGRESS（P02-A 已在 GitHub 开发分支实现并记录局部验证；B/C/D 已获用户授权一次性连续编码，尚未实现）。** 以 `feat/p01-single-agent-web` 的实际代码及中文注释整理为基线。原 P02 三段概述以此四任务 A/B/C/D 细化合同为准；P03–P09 规划保持不变。不得以 P01 的 `PENDING_REVIEW` 冒充验收通过；执行 P02 前先同步并核验 P01 最新代码。
 
 #### P02-1. 用户可见结果、边界及现状
 
@@ -560,9 +561,11 @@ WHERE status IN ('CREATED', 'RUNNING');
 
 **测试文件**：`backend/tests/test_repository.py`、`test_checkpoint.py`、`test_runner.py`、`test_events.py`、`test_runs_api.py`；直接受影响时更新 `test_lead.py`、`test_demo_api.py`、`test_config.py`、`test_health.py`。测试使用临时 SQLite 文件、假模型，不请求真实 Provider、不读取用户本地 `.env`、不创建用户真实数据库。
 
-#### P02-6. 子任务 A/B/C/D（一次仅交给 Codex 一个任务）
+#### P02-6. 子任务 A/B/C/D（B/C/D 已授权合并连续执行）
 
-**P02-A — SQLite + Checkpointer + Thread 列表**
+> **执行补充**：P02-A 已实现，详见 `docs/progress/P02.md`；用户已明确允许剩余 B/C/D 在一个 Codex 任务中顺序实现。**详细执行合同已写入 [docs/tasks/P02-BD.md](tasks/P02-BD.md)**，以此规定 B/C/D 的直接执行顺序、文件/函数、前端同步、各自测试与提交、失败停止条件。本章原 A/B/C/D 功能范围保留作为验收基线，若历史叙述要求逐个等待人工审批，本次以用户的新授权和任务文件为准。
+
+**P02-A — SQLite + Checkpointer + Thread 列表（已实施，待最终 Demo 总体验收）**
 1. 前置核验最新 P01 分支/当前工作区、是否已合入、未提交文件；从完整 P01 最新代码创建/复用 `feat/p02-runtime-web`，不得在旧 main 空代码基础上实现。核对 GitHub 文档/本地文件后确定实际工作树。
 2. 实现依赖锁、路径配置、SQLite RuntimeDatabase/Repository、表索引/状态迁移、`AsyncSqliteSaver` 生命周期与 `build_lead_agent` 可选 saver；FastAPI lifespan 挂载资源与 Thread 创建/列表/历史空列表 API。
 3. 前端增加 ThreadList 真实新建与切换；Agent 输入/Run 按钮注明 B 阶段尚未实现，不伪造执行。
@@ -599,7 +602,7 @@ WHERE status IN ('CREATED', 'RUNNING');
 - 所有新改 Python/TS/TSX 关键逻辑遵守根目录 `AGENTS.md`：中文解释复杂机制，长流程 `1./2./3.` 分段；接口/模型描述保持现有行为。
 - 只运行当前任务及直接受影响接口测试；不要因为迁移到 P02 就无边界跑 P00–P09 全集。关键行为改变/库冲突/Store API 无法按锁版实现，停止相关编码并提交精确证据给用户审核，Codex 不自行改技术栈。
 
-**Git/停止条件**：设计文档落在 `feat/p02-runtime-web` 分支（从 P01 最新远程实现起）；文档提交不代表 A 代码已实现。后续 Codex 只接受当次 A/B/C/D 子任务，检查未提交本地内容，不 reset/clean/force push。每次任务真实测试并单独提交 SHA；任何推送权限错误如实报告。最终用户审核后才能将 `P02.md` 从 `PENDING_REVIEW` 改为 `ACCEPTED` 并进入 P03。
+**Git/停止条件**：本方案及 P02-A 代码已经位于 `feat/p02-runtime-web` 分支。B/C/D 以 [合并任务书](tasks/P02-BD.md) 一次交给 Codex，顺序实施，分别测试和提交 SHA，遇阻塞立即停下，不 reset/clean/force push，也不覆盖本地文件。最终 P02 Demo 完成后只标记 `PENDING_REVIEW`，用户审核通过才能 `ACCEPTED`；不得自动进入 P03。
 
 
 ### P03 — Workspace、文件安全与 Artifact
