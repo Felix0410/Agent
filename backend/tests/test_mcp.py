@@ -39,11 +39,12 @@ BACKEND = Path(__file__).resolve().parents[1]
 
 
 @contextmanager
-def mcp_server(script=None):
+def mcp_server(script=None, port=None):
     """只管理本测试自己的子进程；临时端口不干扰用户8765服务。"""
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
+    if port is None:
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
     command = (
         [sys.executable, "examples/mcp_readonly_server.py", "--port", str(port)]
         if script is None
@@ -304,3 +305,95 @@ def test_remote_schema_refs_rejected():
     for ref in ["http://127.0.0.1:8000/secret", "https://example.com/schema", "file:///etc/passwd"]:
         with pytest.raises(ToolPolicyError):
             validate_local_schema({"properties": {"topic": {"$ref": ref}}})
+
+
+@pytest.mark.parametrize("field", ["description", "schema", "annotations", "write"])
+def test_actual_metadata_changes_cannot_reuse_pin(tmp_path, monkeypatch, field):
+    from minideerflow.tools import mcp_adapter
+
+    with mcp_server() as (_, port):
+
+        async def scenario():
+            path, tools = await approved_config(tmp_path, port)
+            original = tools[0]
+            if field == "description":
+                changed = original.model_copy(update={"description": "changed instructions"})
+            elif field == "schema":
+                changed = original.model_copy(
+                    update={"args_schema": {**original.args_schema, "required": []}}
+                )
+            else:
+                changed = original.model_copy(
+                    update={
+                        "metadata": {
+                            **original.metadata,
+                            "readOnlyHint": False,
+                            "destructiveHint": True,
+                        }
+                    }
+                )
+            if field == "write":
+                data = json.loads(path.read_text())
+                data["servers"][0]["tools"][0]["schema_sha256"] = tool_digest(changed)
+                path.write_text(json.dumps(data))
+
+            async def altered(server):
+                return [changed]
+
+            monkeypatch.setattr(mcp_adapter, "discover", altered)
+            reg = ToolRegistry()
+            register_builtin_tools(reg)
+            await register_mcp_tools(reg, path)
+            assert "mcp_demo_lookup_fact" not in reg.names
+            assert "calculate" in reg.names
+            assert (
+                next(t for t in reg.list_catalog() if t["source"] == "mcp")["availability"]
+                == "MCP_NOT_APPROVED"
+            )
+
+        asyncio.run(scenario())
+
+
+def test_duplicate_mcp_alias_never_overwrites_existing(tmp_path):
+    from minideerflow.tools.registry import ToolDefinition
+
+    with mcp_server() as (_, port):
+
+        async def scenario():
+            path, tools = await approved_config(tmp_path, port)
+            existing = tools[0].model_copy(update={"name": "mcp_demo_lookup_fact"})
+            reg = ToolRegistry()
+            reg.register(
+                ToolDefinition(existing.name, existing, "builtin", "read", 5, "builtin", "existing")
+            )
+            await register_mcp_tools(reg, path)
+            assert reg.get(existing.name).tool is existing
+            catalog = reg.list_catalog()
+            assert len({t["name"] for t in catalog}) == len(catalog)
+            assert any(t["availability"] == "TOOL_DUPLICATE" for t in catalog)
+
+        asyncio.run(scenario())
+
+
+def test_server_restart_requires_new_registry_discovery(tmp_path):
+    with mcp_server() as (process, port):
+
+        async def scenario():
+            path, _ = await approved_config(tmp_path, port)
+            process.terminate()
+            process.wait(timeout=5)
+            offline = ToolRegistry()
+            register_builtin_tools(offline)
+            await register_mcp_tools(offline, path)
+            offline.freeze()
+            assert "mcp_demo_lookup_fact" not in offline.names
+            with mcp_server(port=port):
+                recovered = ToolRegistry()
+                register_builtin_tools(recovered)
+                await register_mcp_tools(recovered, path)
+                recovered.freeze()
+                assert "mcp_demo_lookup_fact" in recovered.names
+                # 已停用的旧快照不会被后台自动重新授权。
+                assert "mcp_demo_lookup_fact" not in offline.names
+
+        asyncio.run(scenario())

@@ -53,6 +53,7 @@ class ToolRegistry:
             not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", definition.name)
             or definition.name != definition.tool.name
             or not 0 < definition.timeout_seconds <= 150
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", definition.origin)
             or definition.source not in ("builtin", "mcp", "skill")
             or definition.permission not in ("read", "write", "orchestrate")
         ):
@@ -89,6 +90,10 @@ class ToolRegistry:
         """故障条目只展示脱敏状态，永不进入可执行集合。"""
         if self._frozen:
             raise ToolPolicyError("TOOL_REGISTRY_FROZEN")
+        # 已有同名内置工具保持原绑定；服务器警告用独立条目，目录不产生重名。
+        if name in self._tools:
+            name = f"{source}_{origin}_status"
+        self._unavailable = [item for item in self._unavailable if item["name"] != name]
         self._unavailable.append(
             {
                 "name": name,

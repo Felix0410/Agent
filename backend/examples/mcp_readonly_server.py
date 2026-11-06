@@ -42,4 +42,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
-    create_server(args.port).run(transport="streamable-http")
+    try:
+        create_server(args.port).run(transport="streamable-http")
+    except KeyboardInterrupt:
+        # Ctrl+C只关闭本进程，不打印无意义的取消堆栈。
+        pass

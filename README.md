@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P01–P04 已有实际代码和阶段测试记录；P02/P03/P04 仍为 PENDING_REVIEW，等待用户最终手动验收。P05 ToolRegistry/MCP/Skills 已完成详细设计与 GitHub 任务合同，仅 PLAN_READY、尚未编码。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P01–P04 已有实际代码和阶段测试记录；P02/P03/P04 仍为 PENDING_REVIEW，等待用户最终手动验收。P05 ToolRegistry/MCP/Skills 已实现并局部验证，状态 PENDING_REVIEW。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -41,7 +41,7 @@
 | [代码可读性与 Codex 规则](AGENTS.md) | 中文注释、复杂逻辑编号分段、只测本次变更、同步前端 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
-**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次新增用户可见功能同步 Web 验证台。P02/P03 已交付而用户手动验收未在此确认；P04 已按 A→B→C→D 分别实施、局部测试和提交，等待用户手动验收，不进入 P05。
+**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次新增用户可见功能同步 Web 验证台。P02/P03 已交付而用户手动验收未在此确认；P04 已按 A→B→C→D 分别实施、局部测试和提交，等待用户手动验收；P05交付见下节，不进入P06。
 
 ## P00 本地开发
 
@@ -276,10 +276,74 @@ uv run pytest -q tests/test_planning_demo.py tests/test_todos.py tests/test_suba
 
 Smoke使用隔离8004后端/5174 Vite与合成文档；测试服务已关闭，临时库/Workspace已清理，未动用户原服务和本地.env。实际模型跨进程重启、故障注入由Fake覆盖；其它OS和PyCharm GUI尚未直接验证。完整SHA/测试命令/推送结果见 [P04进度](docs/progress/P04.md)。等待用户手动验收，不合并main、不进入P05。
 
-## P05 ToolRegistry / MCP / Skills（设计就绪，尚未编码）
+## P05 ToolRegistry / MCP / Skills（PENDING_REVIEW）
 
-P05 已在 `feat/p05-tools-mcp-skills` 分支完成 [详细方案](docs/DEVELOPMENT.md)、[A/B/C/D 逐文件 Codex 合同](docs/tasks/P05-ABCD.md) 和 [独立进度](docs/progress/P05.md) 的设计同步。**当前分支仅继承 P04 实际功能，没有 P05 ToolRegistry/MCP/Skills 的实现代码或 P05 测试结果。**
+已按 [正式方案](docs/DEVELOPMENT.md) 与 [A/B/C/D合同](docs/tasks/P05-ABCD.md) 分别实现和提交。保留P01独立单轮、P02 Run/SSE/Checkpoint、P03文件和P04 Todo/Task；P02/P03/P04的待审核状态不改为已验收。
 
-目标：在现有 LangChain ToolNode 中增加注册表+权限/超时 Middleware，**保留** P04 Todo 的 `Command`、P03 ToolRuntime/Workspace，不能改成新的 Agent while 循环；引入用户显式配置、Schema 指纹批准的只读本地 Streamable HTTP MCP（默认完全不连接），并提供一个不含文件/网络/凭据操作的 `lookup_fact` 示例服务。按需通过 `list_skills/read_skill` 读取本地版本管理的 `SKILL.md`，不会自动安装技能、执行脚本或提升工具权限。
+- ToolRegistry在启动期构造固定工具快照，ToolPolicy由可信Run上下文生成，默认拒绝。官方`awrap_tool_call` Middleware复核真实Run/Thread、权限与公开Schema，单次handler执行、独立工具时限、保留ToolMessage与Command；不会截断P03的64KiB读取结果。写操作超时结果未知，不自动重试。
+- 默认8个父工具：六个原有内置工具，加`list_skills/read_skill`。MCP默认禁用；显式配置且工具原名/描述/输入Schema/注解SHA256均批准后才加入`mcp_demo_lookup_fact`。Child仍仅general三个只读工具、research两个文件读取工具，没有MCP/Skills/写文件或再次委派。
+- MCP仅精确`http://127.0.0.1:<port>/mcp`的Streamable HTTP，最多2个Server、各4个批准工具；拒绝stdio、其它地址、跳转、环境代理、凭据字段及远端Schema引用。输入最多2KiB、输出最多8KiB且纯文本，异常和isError保留真实失败语义。
+- MCP状态来自启动发现与实际调用。实际断连后停止该来源后续准入；已知不可用状态会在目录显示，builtin/Skill继续可用。服务/配置恢复需重启后端重新发现，刷新按钮只GET目录，不重连或批准工具。
+- Skill固定在`backend/skills/public/<directory>/SKILL.md`，最多10个，文件16KiB/正文12KiB；逐级无symlink读取、UTF8/YAML白名单、拒绝锚点/别名/重复key，按需读取复核inode与摘要。`allowed_tools`是前置要求，不是授权；不在System Prompt注入正文，不执行Skill代码。
 
-分为 P05-A Registry/Policy/CapabilityPanel 内置工具展示 → P05-B 真实本机 MCP/故障降级 → P05-C 安全本地 Skill 元数据及正文按需加载 → P05-D Fake/真实模型与浏览器完整联调。每段都同步极简前端、局部测试、独立 SHA；实现后才添加可执行启动命令和实际测试数字。P04 子 Agent 本期不新增 MCP/Skill 权限，Research 角色仍不能声称联网。P02/P03/P04 的待验收状态不变，不自动进入 P06。
+前端“可用工具与Skills”展示实际来源、权限、状态与Skill简介；只有刷新，没有执行或授权按钮。只读接口：
+
+```text
+GET /api/tools
+GET /api/skills
+```
+
+默认运行无需MCP配置：在backend执行`uv sync --locked --group dev`、`uv run python src/minideerflow/main.py`；前端在frontend执行`npm ci`、`npm run dev`。根目录.env继续自动加载，更新代码后重启后端。
+
+### 测试本机MCP示例
+
+先在backend目录启动一个独立终端：
+
+```bash
+uv sync --locked --group dev
+uv run python examples/mcp_readonly_server.py
+```
+
+它只监听127.0.0.1:8765，工具`lookup_fact(topic)`仅查询langgraph/mcp/skills固定字典，没有文件读取、网络检索、Shell或凭据操作。可在另一终端核验实际Schema pin：
+
+```bash
+# 同样在backend目录；只发现并打印原名与摘要，不修改配置
+uv run python -m minideerflow.tools.mcp_adapter
+```
+
+本轮SDK的实际pin为`bb4d0dd3eb360c06d10f7c9b59a01324cd9435f32722da5d12fc5f0e5167e2c3`，已填写`backend/config/mcp_servers.example.json`。摘要以name/description/input_schema/annotations四字段，sort_keys、UTF8、无多余JSON分隔空格计算SHA256。若变更，应先审核服务源码/真实元数据，再人工更新配置；不能自动接受新pin。
+
+显式启用示例后端：
+
+```bash
+# backend目录；该环境变量只影响当前命令，不改本地.env
+MCP_CONFIG_PATH=config/mcp_servers.example.json uv run python src/minideerflow/main.py
+```
+
+PyCharm仍用`backend/.venv/bin/python`，入口`backend/src/minideerflow/main.py`、工作目录backend、无参数；在该Run Configuration的环境变量中加入`MCP_CONFIG_PATH=config/mcp_servers.example.json`即可启用。未设置则不连接任何MCP。不要同时在8000端口启动两份后端。
+
+### 手动Demo
+
+启动上述两个后端进程及前端，检查能力目录出现`mcp_demo_lookup_fact`和`file-analysis`。新建会话，上传一份合成notes.md，再发送：
+
+> 请实际查询本机MCP的langgraph固定事实，读取file-analysis Skill，按指南分析上传文档，最后创建summary.md供我下载；工具失败时请明确说明。
+
+检查真实工具轨迹、文件读取及实际下载；刷新/切换会话后历史和产物应恢复。关闭MCP示例服务后，要求重新实际调用该工具并计算`(12+8)*3`：MCP应失败，calculate仍可返回60；刷新能力目录看到不可用，重启MCP和后端后恢复。正常任务由模型按需选择工具，不强制每轮规划/委派/Skill/MCP调用。
+
+### 验证与限制
+
+锁定`mcp 1.30.0`、`langchain-mcp-adapters 0.3.2`、`PyYAML 6.0.3`，只新增本期依赖及必要传递项，既有依赖未无关升级。OSV查询前两个精确版本未返回已知漏洞记录；这是本次查询结果。MCP Server本身须可信，readOnlyHint不是操作系统沙箱。
+
+在backend目录执行：
+
+```bash
+uv lock --check
+uv sync --locked --group dev
+uv run ruff check src tests examples
+uv run ruff format --check src tests examples
+uv run pytest -q tests/test_tools_demo.py tests/test_tool_registry.py tests/test_tool_guard.py tests/test_mcp.py tests/test_skills.py tests/test_capabilities_api.py tests/test_planning_demo.py tests/test_todos.py tests/test_subagents.py tests/test_task_registry.py tests/test_tasks_api.py tests/test_runner.py tests/test_file_tools.py tests/test_config.py tests/test_runs_api.py tests/test_events.py tests/test_lead.py tests/test_files_api.py tests/test_workspace.py tests/test_demo_api.py tests/test_health.py tests/test_calculator.py tests/test_repository.py tests/test_checkpoint.py
+```
+
+本轮最终结果和每段SHA见 [P05进度](docs/progress/P05.md)。Fake+真实本机MCP/临时数据库验证完整文件、委派隔离、重启与故障；真实浏览器验证目录、下载及历史恢复。deepseek-flash另行实际调用MCP、Skill和文件工具创建2136-byte产物，约9.48秒；MCP下线后的真实错误与calculate=60也通过，合计7次模型调用、12,898 tokens，未获得账单金额。复杂Run的旧SSE回放出现stream_gap，页面通过GET恢复历史；未扩大事件窗口或进入P06。
+
+所有Smoke使用独立8005/5175和临时两库/Workspace、合成文档，已关闭清理，不改本地.env或用户原服务。PyCharm GUI断点、其它OS、真实模型下的子代理委派本轮未再实测（委派由真实Graph+Fake回归覆盖）；不是对任意不可信MCP服务的沙箱保证。当前PENDING_REVIEW，等待用户手动验收，不合并main、不进入P06。

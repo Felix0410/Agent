@@ -54,7 +54,8 @@ class ToolGuardMiddleware(AgentMiddleware):
             await context.workspace_service.repository.check_run(context.thread_id, context.run_id)
             if (
                 definition.source == "mcp"
-                and len(json.dumps(args, ensure_ascii=False).encode("utf-8")) > 2048
+                and len(json.dumps(args, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                > 2048
             ):
                 raise ToolPolicyError("TOOL_INVALID_ARGS")
             schema = definition.tool.tool_call_schema

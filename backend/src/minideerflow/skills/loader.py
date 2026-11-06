@@ -64,6 +64,7 @@ class SkillCatalog:
     def _warn(self, name, code):
         """只显示合法逻辑名，绝不暴露本地路径或解析异常正文。"""
         name = name if re.fullmatch(r"[a-z][a-z0-9-]{0,39}", name) else "invalid-skill"
+        self._warnings = [item for item in self._warnings if item["name"] != name]
         self._warnings.append(
             {
                 "name": name,
@@ -157,6 +158,7 @@ class SkillCatalog:
 
     def _discover(self):
         """单Skill失败明确报告，其它合法条目继续；重复名双方均不可用。"""
+        # 1. 目录发现有总数上限；根不安全时不加载任何正文。
         try:
             with _root_fd(self.root) as fd:
                 directories = sorted(
@@ -169,6 +171,7 @@ class SkillCatalog:
         except Exception as exc:  # noqa: BLE001 - 只输出脱敏目录状态
             self._warn("catalog", exc.code if isinstance(exc, SkillError) else "SKILL_UNSAFE_PATH")
             return
+        # 2. 单项解析失败只产生脱敏警告，不影响其它合法Skill。
         duplicates = set()
         for directory in directories:
             try:
@@ -183,6 +186,7 @@ class SkillCatalog:
                 self._entries[meta.name] = _Entry(directory, *ids, meta)
             except Exception as exc:  # noqa: BLE001 - 不能记录YAML正文/宿主路径
                 self._warn(directory, exc.code if isinstance(exc, SkillError) else "SKILL_INVALID")
+        # 3. 同名的全部条目拒绝，不能依赖目录遍历顺序决定加载哪份。
         for name in duplicates:
             self._entries.pop(name, None)
 
