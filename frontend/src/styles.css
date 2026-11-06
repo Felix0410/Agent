@@ -87,3 +87,20 @@ article {
   margin-top: 12px;
   padding-top: 12px;
 }
+/* P02-A 只增加会话工作台，保留原有 P01 调试区样式。 */
+.thread-workbench {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr);
+  gap: 24px;
+}
+.thread-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.thread-list { list-style: none; padding: 0; }
+.thread-list li { margin: 8px 0; }
+.thread-list button { width: 100%; text-align: left; overflow-wrap: anywhere; }
+.thread-list button[aria-pressed="true"] { outline: 3px solid #8bc3a7; }
+.thread-id { font-size: 13px; overflow-wrap: anywhere; color: #58665d; }
+.thread-detail { border-left: 1px solid #d9e1db; padding-left: 24px; }
+@media (max-width: 640px) {
+  .thread-workbench { grid-template-columns: 1fr; }
+  .thread-detail { border-left: 0; padding-left: 0; }
+}

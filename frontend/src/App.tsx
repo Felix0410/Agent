@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { request } from './api';
+import ThreadList from './components/ThreadList';
 
 type AgentResponse = {
   answer: string;
@@ -71,6 +72,8 @@ export default function App() {
         <h1>Mini DeerFlow</h1>
       </header>
 
+      <ThreadList />
+
       {/* 健康检查和计算器独立运行，不依赖模型配置。 */}
       <section>
         <h2>服务健康</h2>
@@ -131,7 +134,7 @@ export default function App() {
       </section>
 
       <footer>
-        当前已实现：P00 健康 / P01 计算 / P01 Agent 入口（真实模型待配置验证）。后续：会话、SSE、Todo、文件。
+        当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02-A 会话列表。后续：后台 Run、SSE、Todo、文件。
       </footer>
     </main>
   );

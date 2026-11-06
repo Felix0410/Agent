@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +25,27 @@ class Settings(BaseSettings):
     model_api_key: SecretStr | None = None
     model_base_url: str | None = None
     model_timeout_seconds: float = Field(default=45, gt=0, le=300)
+    # 默认数据目录固定在 backend 下，避免 PyCharm 与终端从不同 cwd 创建多份库。
+    runtime_db_path: Path = Path(__file__).resolve().parents[2] / "data/runtime.sqlite3"
+    checkpoint_db_path: Path = Path(__file__).resolve().parents[2] / "data/checkpoints.sqlite3"
+    run_max_concurrency: int = Field(default=2, ge=1, le=2)
+    run_queue_size: int = Field(default=8, ge=1, le=8)
+
+    @field_validator("runtime_db_path", "checkpoint_db_path", mode="before")
+    @classmethod
+    def resolve_database_path(cls, value: str | Path) -> Path:
+        """相对配置也以 backend 为基准，保持从 PyCharm/终端启动的一致性。"""
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parents[2] / path
+        return path.resolve()
+
+    @model_validator(mode="after")
+    def separate_database_files(self) -> "Settings":
+        """业务库与 Graph 库必须分开，不能误认为两者有原子事务。"""
+        if self.runtime_db_path == self.checkpoint_db_path:
+            raise ValueError("runtime and checkpoint databases must use separate files")
+        return self
 
 
 @lru_cache(maxsize=1)

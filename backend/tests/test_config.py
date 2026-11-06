@@ -117,3 +117,40 @@ def test_invalid_dotenv_rejected(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("LOG_LEVEL=INVALID\n", encoding="utf-8")
     with pytest.raises(ValidationError):
         get_settings()
+
+
+def test_runtime_defaults_are_backend_absolute_paths(monkeypatch, tmp_path: Path) -> None:
+    for name in ["RUNTIME_DB_PATH", "CHECKPOINT_DB_PATH"]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
+    settings = get_settings()
+    backend = Path(__file__).resolve().parents[1]
+    assert settings.runtime_db_path == backend / "data/runtime.sqlite3"
+    assert settings.checkpoint_db_path == backend / "data/checkpoints.sqlite3"
+    assert settings.run_max_concurrency == 2
+    assert settings.run_queue_size == 8
+
+
+def test_relative_database_config_is_based_on_backend(monkeypatch) -> None:
+    monkeypatch.setenv("RUNTIME_DB_PATH", "data/alternate.sqlite3")
+    assert (
+        get_settings().runtime_db_path
+        == Path(__file__).resolve().parents[1] / "data/alternate.sqlite3"
+    )
+
+
+def test_business_and_checkpoint_paths_cannot_collide(monkeypatch, tmp_path: Path) -> None:
+    path = str(tmp_path / "same.sqlite3")
+    monkeypatch.setenv("RUNTIME_DB_PATH", path)
+    monkeypatch.setenv("CHECKPOINT_DB_PATH", path)
+    with pytest.raises(ValidationError):
+        get_settings()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"), [("RUN_MAX_CONCURRENCY", "3"), ("RUN_QUEUE_SIZE", "9")]
+)
+def test_runtime_capacity_bounds(monkeypatch, field: str, value: str) -> None:
+    monkeypatch.setenv(field, value)
+    with pytest.raises(ValidationError):
+        get_settings()

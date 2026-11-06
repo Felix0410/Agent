@@ -9,8 +9,6 @@ from minideerflow.config import Settings
 class ModelNotConfigured(Exception):
     """请求模型时缺少名称或密钥；不影响基础服务启动。"""
 
-    pass
-
 
 def build_chat_model(settings: Settings) -> BaseChatModel:
     """在实际 Agent 请求到达时创建模型，避免健康检查依赖外部服务。"""
