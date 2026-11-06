@@ -162,3 +162,8 @@ export type TodoItem = {todo_id:string; title:string; status:"pending"|"in_progr
 export function getTodos(runId:string):Promise<TodoItem[]> {
  return request(`/api/runs/${encodeURIComponent(runId)}/todos`);
 }
+
+export type TaskRecord = {id:string; run_id:string; thread_id:string; agent_type:string; description:string; todo_id:string|null; status:"PENDING"|"RUNNING"|"COMPLETED"|"FAILED"|"TIMED_OUT"|"CANCELLED"; result_summary:string|null; error_code:string|null; source_file_ids:string[]; truncated:boolean; created_at:string; started_at:string|null; finished_at:string|null};
+export function getSubtasks(runId:string):Promise<TaskRecord[]> {
+ return request(`/api/runs/${encodeURIComponent(runId)}/subtasks`);
+}

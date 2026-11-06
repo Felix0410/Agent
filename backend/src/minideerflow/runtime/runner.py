@@ -11,6 +11,7 @@ from minideerflow.agents.context import AgentRunContext
 from minideerflow.agents.lead import build_lead_agent
 from minideerflow.agents.service import AgentExecutionError, validate_message
 from minideerflow.agents.state import P04AgentState
+from minideerflow.agents.subagents.dispatcher import TaskDispatcher
 from minideerflow.config import Settings
 from minideerflow.core.model import ModelNotConfigured, build_chat_model
 from minideerflow.runtime.events import EventBus
@@ -20,6 +21,7 @@ from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.streaming import stream_agent
 from minideerflow.tools.calculator import calculate
 from minideerflow.tools.file_tools import list_files, read_text, write_text
+from minideerflow.tools.task_tool import task
 from minideerflow.tools.todo_tool import write_todos
 from minideerflow.workspace.models import WorkspaceContext
 from minideerflow.workspace.service import WorkspaceService
@@ -138,14 +140,18 @@ class RunService:
                 tools = [calculate, list_files, read_text, write_text]
                 p04 = self.plans is not None
                 if p04:
+                    dispatcher = TaskDispatcher(
+                        self.plans.repository, lambda: self.model_factory(self.settings)
+                    )
                     context = AgentRunContext(
                         run.thread_id,
                         run.id,
                         self.workspace,
                         self.plans,
                         lambda kind, payload: self._emit(run.id, kind, payload),
+                        dispatcher,
                     )
-                    tools.append(write_todos)
+                    tools.extend([write_todos, task])
                 agent = build_lead_agent(
                     model,
                     tools,
@@ -153,7 +159,7 @@ class RunService:
                     context_schema=AgentRunContext if p04 else WorkspaceContext,
                     state_schema=P04AgentState if p04 else None,
                     prompt_suffix=(
-                        " For complex tasks use write_todos and keep the complete plan updated. Simple questions need no plan."
+                        " For complex tasks use write_todos and keep the complete plan updated. Use task to delegate focused goals to general/research (existing material only, no internet). Child agents cannot write files; use write_text yourself for a final artifact. Report failures honestly. Simple questions need no plan or delegation."
                         if p04
                         else ""
                     ),

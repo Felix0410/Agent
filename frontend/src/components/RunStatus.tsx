@@ -1,3 +1,4 @@
+import TaskPanel from "./TaskPanel";
 import TodoPanel from "./TodoPanel";
 import type { TodoItem } from "../api/runtime";
 import type { RunDto } from "../api/runtime";
@@ -29,6 +30,7 @@ export default function RunStatus({
         {run.input_message}
       </p>
       <p>状态：{run.status}</p>
+      <TaskPanel runId={run.id} status={run.status} revision={planRevision} />
       <TodoPanel runId={run.id} status={run.status} snapshot={live?.todos} revision={planRevision} />
       {run.status === "SUCCEEDED" && <output>{run.answer}</output>}
       {live && !["SUCCEEDED", "FAILED", "CANCELLED"].includes(run.status) && (
