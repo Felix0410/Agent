@@ -1,7 +1,7 @@
 # 总体业务与系统架构（正式方案）
 
-**版本**：v1.1 · 2026-11-04  
-**状态**：架构方向和 V1 范围确定，尚无业务代码；开发过程如遇事实冲突，通过开发文档记录变更，不随意改目标。  
+**版本**：v1.2 · 2026-11-06  
+**状态**：V1 总体架构确定；P01 单 Agent/FastAPI/React 已在开发分支实现，P02 Thread/Run/SSE 已完成详细设计但尚未编码。阶段范围和接口细节以 [DEVELOPMENT.md](DEVELOPMENT.md) 为准，不能把设计视为已实现。  
 **参考基线**：[DeerFlow 2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，commit `7e7f0410797693cf882594555ba414e0361d4c6f`。本项目自行实现，不 Fork 原项目。
 
 ## 1. 目标与边界
@@ -88,29 +88,34 @@ Browser / React-Vite
           └─ Knowledge Services (Docling, embedding, Chroma)
 ```
 
-### 3.2 目标代码目录（逐阶段创建，禁止先堆空包）
+### 3.2 实际工程布局与目标模块（按阶段增加）
+
+目前使用可安装的 `backend/src/minideerflow/` 包，**不新建第二套 `backend/app/`**。P01 已有核心模型、Agent、计算工具及本地演示 API；P02 才增加运行时与历史会话：
 
 ```text
 backend/
-  app/
-    api/            # threads, runs, SSE, files API
-    core/           # settings, model factory, errors
-    agents/         # lead agent, state, middleware
-      subagents/    # task dispatcher, registry
-    tools/          # builtin tools, registry, MCP adapter
-    skills/         # SKILL.md discovery/activation
-    runtime/        # run lifecycle, event stream, checkpoint
-    workspace/      # safe file access and artifacts
-    research/       # web search, evidence, report
-    knowledge/      # parsing, chunking, vector retrieval
+  pyproject.toml
+  src/minideerflow/
+    main.py                 # FastAPI 应用/lifespan
+    config.py               # Settings 与根目录 .env
+    api/                    # demo 已有，threads/runs 从 P02 增加
+    core/                   # 模型工厂
+    agents/                 # 主 Agent 和服务
+    tools/                  # 受限内置工具
+    runtime/                # P02: Run、SQLite、Checkpoint、EventBus
+    workspace/              # P03 起
+    skills/                 # P05 起
+    research/               # P07 起
+    knowledge/              # P08 起
   tests/
-frontend/            # React + Vite + TypeScript
-eval/                # fixed examples and true evaluation outputs
-docs/ARCHITECTURE.md
+  data/                     # 本地数据库与执行产物，Git 忽略
+frontend/                   # 已有 React + Vite + TypeScript
 docs/DEVELOPMENT.md
+docs/progress/
+docs/tasks/                 # 当阶段 Codex 执行清单
 ```
 
-后端不按模块拆微服务，不建两套 Agent 框架。API 只能调用应用服务，不把 Run 生命周期、LLM 调用和文件路径校验全部放进 Router。
+上面注释为模块落地顺序，不表示未来模块已经创建。后端仍为单体，不按模块拆微服务，不构建两套 Agent 框架。API 只能调用应用服务，不把 Run 生命周期、LLM 调用和路径校验都塞进 Router。
 
 ## 4. 模块职责与接口
 
