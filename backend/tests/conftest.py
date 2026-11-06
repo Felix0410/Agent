@@ -16,6 +16,7 @@ def isolated_runtime_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
         monkeypatch.delenv(name.upper(), raising=False)
     monkeypatch.setenv("RUNTIME_DB_PATH", str(tmp_path / "runtime.sqlite3"))
     monkeypatch.setenv("CHECKPOINT_DB_PATH", str(tmp_path / "checkpoints.sqlite3"))
+    monkeypatch.setenv("WORKSPACE_ROOT_PATH", str(tmp_path / "workspaces"))
     get_settings.cache_clear()
     yield
     # 2. 防止 Settings 缓存把临时路径或测试密钥带到下一个测试。

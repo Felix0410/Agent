@@ -30,6 +30,31 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS ix_runs_thread_history ON runs(thread_id, created_at, id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_runs_one_active_per_thread
     ON runs(thread_id) WHERE status IN ('CREATED', 'RUNNING');
+CREATE TABLE IF NOT EXISTS files (
+    id TEXT PRIMARY KEY NOT NULL,
+    thread_id TEXT NOT NULL REFERENCES threads(id),
+    run_id TEXT REFERENCES runs(id),
+    display_name TEXT NOT NULL CHECK(length(display_name) BETWEEN 1 AND 120),
+    storage_key TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL CHECK(kind IN ('UPLOAD','ARTIFACT')),
+    mime TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL CHECK(size_bytes >= 0),
+    sha256 TEXT NOT NULL CHECK(length(sha256)=64),
+    created_at TEXT NOT NULL,
+    CHECK((kind='UPLOAD' AND run_id IS NULL) OR (kind='ARTIFACT' AND run_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS ix_files_thread ON files(thread_id,created_at,id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_artifact_display_name
+    ON files(thread_id,display_name) WHERE kind='ARTIFACT';
+CREATE TABLE IF NOT EXISTS artifacts (
+    id TEXT PRIMARY KEY NOT NULL,
+    file_id TEXT UNIQUE NOT NULL REFERENCES files(id),
+    thread_id TEXT NOT NULL REFERENCES threads(id),
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_artifacts_thread ON artifacts(thread_id,created_at,id);
+
 """
 
 

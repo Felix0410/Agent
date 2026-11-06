@@ -7,6 +7,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import FastAPI
 
 from minideerflow.api.demo import router
+from minideerflow.api.files import router as files_router
 from minideerflow.api.runs import router as runs_router
 from minideerflow.api.threads import router as threads_router
 from minideerflow.config import get_settings
@@ -15,6 +16,9 @@ from minideerflow.runtime.db import RuntimeDatabase
 from minideerflow.runtime.events import EventBus
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.runner import RunService
+from minideerflow.workspace.repository import WorkspaceRepository
+from minideerflow.workspace.service import WorkspaceService
+from minideerflow.workspace.storage import WorkspaceStorage
 
 
 @asynccontextmanager
@@ -34,6 +38,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.database = database
         app.state.checkpointer = saver
         app.state.repository = repository
+        storage = WorkspaceStorage(settings.workspace_root_path)
+        storage.open()
+        stack.callback(storage.close)
+        app.state.workspace = WorkspaceService(WorkspaceRepository(database), storage)
         # 3. worker 退出必须先于 Saver/DB 关闭，避免运行中的 Graph 使用已关闭连接。
         events = EventBus()
         events.start()
@@ -53,6 +61,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(threads_router)
     app.include_router(runs_router)
+    app.include_router(files_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

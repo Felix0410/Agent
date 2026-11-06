@@ -154,3 +154,22 @@ def test_runtime_capacity_bounds(monkeypatch, field: str, value: str) -> None:
     monkeypatch.setenv(field, value)
     with pytest.raises(ValidationError):
         get_settings()
+
+
+def test_workspace_config_resolves_relative_without_following_root_symlink(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_ROOT_PATH", "data/workspaces")
+    assert (
+        get_settings().workspace_root_path
+        == Path(__file__).resolve().parents[1] / "data/workspaces"
+    )
+    outside = tmp_path / "target"
+    outside.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(outside, target_is_directory=True)
+    assert Settings(workspace_root_path=alias).workspace_root_path == alias
+
+
+def test_workspace_cannot_contain_business_database(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_ROOT_PATH", str(tmp_path))
+    with pytest.raises(ValidationError):
+        get_settings()

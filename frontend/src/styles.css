@@ -108,3 +108,7 @@ article {
 /* B：会话选择与聊天并排；长消息与工具结果不撑破窄屏。 */
 .thread-workbench > section { min-width: 0; }
 .tool-trace { border-left: 3px solid #8bc3a7; padding-left: 12px; margin: 12px 0; }
+
+/* P03 文件信息不显示宿主机路径，长文件名/ID 在窄屏折行。 */
+[aria-label="会话文件"] li { overflow-wrap: anywhere; margin: 12px 0; }
+[aria-label="会话文件"] button { margin-right: 8px; }

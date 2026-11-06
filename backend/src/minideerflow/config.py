@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # 默认数据目录固定在 backend 下，避免 PyCharm 与终端从不同 cwd 创建多份库。
     runtime_db_path: Path = Path(__file__).resolve().parents[2] / "data/runtime.sqlite3"
     checkpoint_db_path: Path = Path(__file__).resolve().parents[2] / "data/checkpoints.sqlite3"
+    workspace_root_path: Path = Path(__file__).resolve().parents[2] / "data/workspaces"
     run_max_concurrency: int = Field(default=2, ge=1, le=2)
     run_queue_size: int = Field(default=8, ge=1, le=8)
 
@@ -45,7 +46,23 @@ class Settings(BaseSettings):
         """业务库与 Graph 库必须分开，不能误认为两者有原子事务。"""
         if self.runtime_db_path == self.checkpoint_db_path:
             raise ValueError("runtime and checkpoint databases must use separate files")
+        if any(
+            path == self.workspace_root_path or path.is_relative_to(self.workspace_root_path)
+            for path in (self.runtime_db_path, self.checkpoint_db_path)
+        ):
+            raise ValueError("workspace must not contain runtime databases")
         return self
+
+    @field_validator("workspace_root_path", mode="before")
+    @classmethod
+    def workspace_path(cls, value: str | Path) -> Path:
+        """不 resolve 工作区 symlink，交给存储层逐级无跟随校验。"""
+        import os
+
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parents[2] / path
+        return Path(os.path.abspath(path))
 
 
 @lru_cache(maxsize=1)

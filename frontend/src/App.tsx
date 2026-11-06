@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { request } from "./api";
 import ThreadList from "./components/ThreadList";
 import ChatPanel from "./components/ChatPanel";
+import FilesPanel from "./components/FilesPanel";
 import { listThreads } from "./api/runtime";
 import type { ThreadDto } from "./api/runtime";
 
@@ -139,6 +140,8 @@ export default function App() {
         />
       </div>
 
+      {selectedThread && <FilesPanel key={selectedThread.id} threadId={selectedThread.id} />}
+
       {/* 健康检查和计算器独立运行，不依赖模型配置。 */}
       <section>
         <h2>服务健康</h2>
@@ -203,7 +206,7 @@ export default function App() {
 
       <footer>
         当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02 会话记忆 / 后台 Run /
-        SSE。后续：Todo、文件。
+        SSE。P03-A 上传/文件列表。后续：Artifact、Todo。
       </footer>
     </main>
   );

@@ -187,3 +187,9 @@ PyCharm GUI断点和用户最终Demo验收待人工完成。开发使用的临�
 当前 [P03 开发方案](docs/DEVELOPMENT.md) 与 [Codex 执行清单](docs/tasks/P03-ABC.md) 仅定义**待开发**功能：当前 Thread 上传 UTF-8 TXT/MD/CSV/JSON 或原样存储 PDF；Agent 通过可信 LangChain ToolRuntime 上下文访问已登记的文件，执行 `list_files/read_text/write_text`，把生成文件登记为 Artifact 后由浏览器下载；文件系统以不跟随符号链接、UUID 存储名、文件描述符及无覆盖原子发布保证本地范围的文件访问安全。限制为文本上传 2 MiB、PDF 10 MiB、每 Thread 50 文件共 30 MiB；PDF 解析留到 P08。
 
 阶段实施：P03-A 安全存储/上传/前端文件列表，P03-B File Tools/Artifact 下载/前端联动，P03-C 重启/异常测试与 Demo 收尾。**目前没有 P03 的运行成果、上传记录或通过的测试。** `docs/progress/P03.md` 用于逐任务记录真实提交及结果。P01/P02 原有功能应始终保留。
+
+## P03-A 文件上传（本次增量）
+
+当前Thread可上传 UTF-8 txt/md/csv/json（2MiB）或PDF（10MiB，仅存储不解析）；总50项/30MiB。`WORKSPACE_ROOT_PATH`默认backend/data/workspaces，相对路径从backend解析。实际存储只用内部UUID，显示名不参与磁盘路径。上传和文件列表不需要模型配置；本地 `.env` 保持原样。
+
+新增POST/GET `/api/threads/{thread_id}/files`；浏览器FormData字段file单文件，201返回已登记FileRecord，无宿主机路径。只支持安全POSIX本地存储，目录symlink/替换、非法内容和配额等错误会拒绝。P03-A尚无文件工具或Artifact下载；原P01/P02功能保留。
