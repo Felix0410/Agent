@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P01–P03 代码已在各自分支实现；P02/P03 仍为 PENDING_REVIEW，未得到用户最终手动验收结论。P04 Todo/Sub-Agent 已实现并局部验证，状态 PENDING_REVIEW。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P01–P04 已有实际代码和阶段测试记录；P02/P03/P04 仍为 PENDING_REVIEW，等待用户最终手动验收。P05 ToolRegistry/MCP/Skills 已完成详细设计与 GitHub 任务合同，仅 PLAN_READY、尚未编码。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -37,6 +37,7 @@
 | [P02-B/C/D 联合执行任务书](docs/tasks/P02-BD.md) | 一次性交给 Codex，按 B→C→D 连续实现、分别测试提交并同步前端 |
 | [P03-A/B/C 实施任务书](docs/tasks/P03-ABC.md) | 本阶段 Workspace / ToolRuntime / Artifact 三任务的逐文件编码、局部测试与安全约束 |
 | [P04-A/B/C/D Codex 任务书](docs/tasks/P04-ABCD.md) | P04 Todo 状态、受限子代理、并发/事件与 Demo 的逐文件任务及测试 |
+| [P05-A/B/C/D Codex 任务书](docs/tasks/P05-ABCD.md) | ToolRegistry/ToolGuard、本地 MCP Server、Skills 与前端测试的精确文件/接口/验证要求 |
 | [代码可读性与 Codex 规则](AGENTS.md) | 中文注释、复杂逻辑编号分段、只测本次变更、同步前端 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
@@ -274,3 +275,11 @@ uv run pytest -q tests/test_planning_demo.py tests/test_todos.py tests/test_suba
 真实模型deepseek-flash独立验证：3项Todo、general/research两次实际task、真实文件读取、summary.md落盘下载、刷新/跨会话隔离均通过。复杂Run约15.80秒、12次模型调用、19,797 tokens；另测普通问候/实际calculate=60，不产生Todo/Task。本轮真实验证合计15次模型调用、30,823 tokens（提供方usage，未获得实际账单金额）。真模型与Fake结果分别记录，不以模型宣称代替工具证据。
 
 Smoke使用隔离8004后端/5174 Vite与合成文档；测试服务已关闭，临时库/Workspace已清理，未动用户原服务和本地.env。实际模型跨进程重启、故障注入由Fake覆盖；其它OS和PyCharm GUI尚未直接验证。完整SHA/测试命令/推送结果见 [P04进度](docs/progress/P04.md)。等待用户手动验收，不合并main、不进入P05。
+
+## P05 ToolRegistry / MCP / Skills（设计就绪，尚未编码）
+
+P05 已在 `feat/p05-tools-mcp-skills` 分支完成 [详细方案](docs/DEVELOPMENT.md)、[A/B/C/D 逐文件 Codex 合同](docs/tasks/P05-ABCD.md) 和 [独立进度](docs/progress/P05.md) 的设计同步。**当前分支仅继承 P04 实际功能，没有 P05 ToolRegistry/MCP/Skills 的实现代码或 P05 测试结果。**
+
+目标：在现有 LangChain ToolNode 中增加注册表+权限/超时 Middleware，**保留** P04 Todo 的 `Command`、P03 ToolRuntime/Workspace，不能改成新的 Agent while 循环；引入用户显式配置、Schema 指纹批准的只读本地 Streamable HTTP MCP（默认完全不连接），并提供一个不含文件/网络/凭据操作的 `lookup_fact` 示例服务。按需通过 `list_skills/read_skill` 读取本地版本管理的 `SKILL.md`，不会自动安装技能、执行脚本或提升工具权限。
+
+分为 P05-A Registry/Policy/CapabilityPanel 内置工具展示 → P05-B 真实本机 MCP/故障降级 → P05-C 安全本地 Skill 元数据及正文按需加载 → P05-D Fake/真实模型与浏览器完整联调。每段都同步极简前端、局部测试、独立 SHA；实现后才添加可执行启动命令和实际测试数字。P04 子 Agent 本期不新增 MCP/Skill 权限，Research 角色仍不能声称联网。P02/P03/P04 的待验收状态不变，不自动进入 P06。
