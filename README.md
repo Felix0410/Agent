@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P03 A/B/C 已实现并验证，P03 为 PENDING_REVIEW，等待用户手动测试。P02 仍保留 PENDING_REVIEW，未开始 P04。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P01–P03 代码已在各自分支实现；P02/P03 仍为 PENDING_REVIEW，未得到用户最终手动验收结论。P04 Todo/Sub-Agent 已设计并写入开发分支，目前仅 PLAN_READY、尚未编码。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -36,10 +36,11 @@
 | [P02-A Codex 执行清单](docs/tasks/P02-A.md) | 可按文件实施的 SQLite / Checkpointer / Thread API 与前端同步任务 |
 | [P02-B/C/D 联合执行任务书](docs/tasks/P02-BD.md) | 一次性交给 Codex，按 B→C→D 连续实现、分别测试提交并同步前端 |
 | [P03-A/B/C 实施任务书](docs/tasks/P03-ABC.md) | 本阶段 Workspace / ToolRuntime / Artifact 三任务的逐文件编码、局部测试与安全约束 |
+| [P04-A/B/C/D Codex 任务书](docs/tasks/P04-ABCD.md) | P04 Todo 状态、受限子代理、并发/事件与 Demo 的逐文件任务及测试 |
 | [代码可读性与 Codex 规则](AGENTS.md) | 中文注释、复杂逻辑编号分段、只测本次变更、同步前端 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
-**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次开发任务同步 Web 验证台。P02 A/B/C/D 已交付并等待最终用户手动验收；用户请求启动 P03，详细规格和逐文件 Codex 清单已提交到 P03 开发分支。P03 按 A→B→C 逐项运行局部测试和提交，若出现文件安全/权限边界问题立刻停止。
+**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次新增用户可见功能同步 Web 验证台。P02/P03 已交付而用户手动验收未在此确认；P04 已完成设计（不算实现），按 A→B→C→D 逐项落实真实代码、局部测试和提交，关键失败停止。未经用户明确启动编码，不将设计文档状态当作 P04 运行成果。
 
 ## P00 本地开发
 
@@ -222,3 +223,14 @@ uv run ruff format --check src tests
 Fake/临时资源覆盖安全路径、上传配额、Context与ToolMessage、跨Thread、原子同名竞争、SQL回滚、取消/失败、两库+Workspace完整重开和下载校验。真实 **deepseek-flash** 另用专门临时样例，经实际浏览器上传→list/read/write→SSE与SUCCEEDED→自动产物列表→下载与刷新再下载通过；生成summary.md 576 bytes，读取内容SHA与上传登记一致，写入参数与下载字节一致。未记录密钥、原始认证头或私人文档。
 
 当前实测平台为macOS；其它POSIX平台和PyCharm GUI断点未直接验证，能力缺失会fail closed。完整重启/故障注入用Fake验证，没有额外使用真实模型注入故障。开发Smoke使用独立端口/临时两库与Workspace，完成后关闭并清理；用户原8000服务未停止，验收时请自行重启以加载新代码。详细文件、SHA、命令及推送结果见 [P03进度](docs/progress/P03.md)。
+
+
+## P04 Todo 与 Sub-Agent（正式设计，尚未编码）
+
+[开发设计](docs/DEVELOPMENT.md) 和 [逐文件 Codex 任务书](docs/tasks/P04-ABCD.md) 已完成并在 `feat/p04-planning-subagents` 分支提交。
+
+目标：Lead Agent 根据任务复杂度选择是否用 `write_todos` 建立真实结构化计划，再调用 `task` 将子任务交给 `general` 或 `research`。每个 child 独立消息上下文、无父 Checkpointer、不可二次委派；`general` 仅用 calculate/list_files/read_text，`research` 仅用已上传文件 list_files/read_text（**不代表可以联网搜索**）。父 Run 最多同时 3 个子代理、累计 4 次委派；父 Agent 可以用已实现的 P03 write_text 生成下载产物。
+
+设计新增 Run Todo 与 Subtask SQLite 快照、真实状态 SSE、历史只读接口 `GET /api/runs/{run_id}/todos` 和 `GET /api/runs/{run_id}/subtasks`，前端计划展示 TodoPanel 和 TaskPanel。A→B→C→D 分别实现并在每个子任务完成时同步前端、局部测试和 Git SHA；原有 P01 单轮 Demo、P02 SSE/Checkpoint 与 P03 文件/Artifact 必须保留。
+
+**P04 目前只有设计，没有新增业务代码、构建或模型测试结果**；进度参见 [P04 状态](docs/progress/P04.md)。P02/P03 保留各自 PENDING_REVIEW，不自动启动 P05。
