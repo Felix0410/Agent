@@ -16,7 +16,12 @@ EventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 async def stream_agent(
-    agent: Any, thread_id: str, message: str, event_sink: EventSink | None = None
+    agent: Any,
+    thread_id: str,
+    message: str,
+    event_sink: EventSink | None = None,
+    *,
+    on_graph_start: Callable[[], None] | None = None,
 ) -> AgentResponse:
     """以框架流执行一次 Run，只验收当前新增消息，排除 Checkpoint 的旧历史。"""
     config = thread_config(thread_id)
@@ -33,6 +38,9 @@ async def stream_agent(
             await event_sink(kind, payload)
 
     # 2. messages 只转换真实模型文本，updates 才发出完整工具调用/回执。
+    # 读取历史失败还没开始写 Graph；到这个边界才通知 Runner 标记执行已进入。
+    if on_graph_start is not None:
+        on_graph_start()
     async for mode, data in agent.astream(
         {"messages": [{"role": "user", "content": message}]},
         config=config,

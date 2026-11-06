@@ -157,6 +157,7 @@ def test_failure_and_recovery(tmp_path, monkeypatch, mode):
     from minideerflow.runtime import runner
 
     async def broken(*args, **kwargs):
+        kwargs["on_graph_start"]()
         if mode == "timeout":
             await asyncio.sleep(1)
         if mode == "upstream":
@@ -204,6 +205,7 @@ def test_shutdown_cleans_workers_and_queued_runs(tmp_path, monkeypatch):
     from minideerflow.runtime import runner
 
     async def blocked(*args, **kwargs):
+        kwargs["on_graph_start"]()
         await asyncio.Event().wait()
 
     monkeypatch.setattr(runner, "stream_agent", blocked)
@@ -442,5 +444,25 @@ def test_stream_message_validation_and_delta_filters(mode):
             assert response.answer == "2" and len(response.tool_calls) == 1
             assert [kind for kind, payload in events].count("tool_end") == 1
             assert [p["text"] for k, p in events if k == "assistant_delta"] == ["2"]
+
+    asyncio.run(scenario())
+
+
+def test_checkpoint_read_failure_before_graph_preserves_thread(tmp_path, monkeypatch):
+    from minideerflow.runtime import runner
+
+    class UnreadableGraph:
+        async def aget_state(self, config):
+            raise RuntimeError("private-storage-error")
+
+    monkeypatch.setattr(runner, "build_lead_agent", lambda *args: UnreadableGraph())
+
+    async def scenario():
+        async with running_service(tmp_path) as (service, repo):
+            thread = await repo.create_thread()
+            accepted = await service.start_run(thread.id, "fails before graph starts")
+            await finished(service)
+            assert (await repo.get_run(accepted.run_id)).status == RunStatus.FAILED
+            assert not (await repo.get_thread(thread.id)).needs_recovery
 
     asyncio.run(scenario())

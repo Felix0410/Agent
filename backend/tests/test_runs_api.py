@@ -161,3 +161,127 @@ def test_terminal_event_only_after_database_commit(monkeypatch, fail):
         assert observed == ["FAILED" if fail else "SUCCEEDED"]
         assert events[-1]["payload"]["status"] == observed[0]
         assert "private-secret" not in str(events)
+
+
+def test_restart_restores_history_checkpoint_and_isolation(monkeypatch):
+    models = []
+
+    def factory(settings):
+        model = fake_factory(settings)
+        models.append(model)
+        return model
+
+    monkeypatch.setattr(runner, "build_chat_model", factory)
+    first_app = create_app()
+    with TestClient(first_app) as client:
+        thread = client.post("/api/threads", json={"title": "persistent"}).json()["id"]
+        ids = []
+        for message in ["remember", "continue"]:
+            accepted = client.post(f"/api/threads/{thread}/runs", json={"message": message}).json()
+            ids.append(accepted["run_id"])
+            drain(client, first_app)
+        assert [m.content for m in models[-1].seen[0]][1:] == ["remember", "answer", "continue"]
+        workers = list(first_app.state.runner._workers)
+    assert first_app.state.database._closed and all(task.done() for task in workers)
+    second_app = create_app()
+    with TestClient(second_app) as client:
+        assert client.get("/api/threads").json()[0]["id"] == thread
+        assert [r["id"] for r in client.get(f"/api/threads/{thread}/runs").json()] == ids
+        assert client.get(f"/api/runs/{ids[0]}/events").status_code == 410
+        accepted = client.post(
+            f"/api/threads/{thread}/runs", json={"message": "after restart"}
+        ).json()
+        drain(client, second_app)
+        assert [m.content for m in models[-1].seen[0]][1:] == [
+            "remember",
+            "answer",
+            "continue",
+            "answer",
+            "after restart",
+        ]
+        other = client.post("/api/threads", json={}).json()["id"]
+        client.post(f"/api/threads/{other}/runs", json={"message": "independent"})
+        drain(client, second_app)
+        assert [m.content for m in models[-1].seen[0]][1:] == ["independent"]
+        assert client.get("/health").json() == {"status": "ok"}
+        assert client.post("/api/demo/calculate", json={"expression": "(12+8)*3"}).json() == {
+            "result": "60"
+        }
+
+
+def test_restart_orphans_block_only_affected_threads(monkeypatch):
+    from minideerflow.runtime.models import RunStatus
+
+    monkeypatch.setattr(runner, "build_chat_model", fake_factory)
+    app = create_app()
+    with TestClient(app) as client:
+        ids = [client.post("/api/threads", json={}).json()["id"] for _ in range(3)]
+        created = client.portal.call(app.state.repository.create_run, ids[0], "queued before crash")
+        running = client.portal.call(
+            app.state.repository.create_run, ids[1], "running before crash"
+        )
+        client.portal.call(
+            app.state.repository.transition_run, running.id, RunStatus.CREATED, RunStatus.RUNNING
+        )
+    # 没入内存队列的遗留记录模拟崩溃；正常 shutdown 不应伪称它们执行过。
+    restarted = create_app()
+    with TestClient(restarted) as client:
+        for thread, run in zip(ids[:2], [created, running]):
+            saved = client.get("/api/runs/" + run.id).json()
+            assert saved["status"] == "FAILED" and saved["error_code"] == "RUN_INTERRUPTED"
+            response = client.post(f"/api/threads/{thread}/runs", json={"message": "unsafe replay"})
+            assert response.status_code == 409
+            assert response.json()["detail"]["code"] == "THREAD_REQUIRES_RECOVERY"
+        response = client.post(f"/api/threads/{ids[2]}/runs", json={"message": "healthy"})
+        assert response.status_code == 202
+        drain(client, restarted)
+
+
+def test_tool_checkpoint_partial_failure_requires_recovery(monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+    from test_lead import ScriptedModel
+
+    from minideerflow.runtime.checkpoints import thread_config
+
+    class BrokenAfterTool(ScriptedModel):
+        def _generate(self, messages, *args, **kwargs):
+            if any(isinstance(m, ToolMessage) for m in messages):
+                raise RuntimeError("private-secret")
+            return super()._generate(messages, *args, **kwargs)
+
+    def factory(settings):
+        return BrokenAfterTool(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "partial-call",
+                            "name": "calculate",
+                            "args": {"expression": "1+1"},
+                        }
+                    ],
+                )
+            ]
+        )
+
+    monkeypatch.setattr(runner, "build_chat_model", factory)
+    app = create_app()
+    with TestClient(app) as client:
+        thread = client.post("/api/threads", json={}).json()["id"]
+        accepted = client.post(
+            f"/api/threads/{thread}/runs", json={"message": "fail after tool"}
+        ).json()
+        drain(client, app)
+        saved = client.get("/api/runs/" + accepted["run_id"]).json()
+        assert saved["status"] == "FAILED" and saved["answer"] is None
+        events = parse_events(client.get("/api/runs/" + accepted["run_id"] + "/events").text)
+        assert any(e["type"] == "tool_end" and e["payload"]["result"] == "2" for e in events)
+        checkpoint = client.portal.call(app.state.checkpointer.aget_tuple, thread_config(thread))
+        assert any(
+            isinstance(m, ToolMessage) for m in checkpoint.checkpoint["channel_values"]["messages"]
+        )
+        assert (
+            client.post(f"/api/threads/{thread}/runs", json={"message": "do not rerun"}).status_code
+            == 409
+        )

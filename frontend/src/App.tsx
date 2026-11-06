@@ -1,8 +1,9 @@
-import { useState } from 'react';
-import { request } from './api';
-import ThreadList from './components/ThreadList';
-import ChatPanel from './components/ChatPanel';
-import type { ThreadDto } from './api/runtime';
+import { useEffect, useRef, useState } from "react";
+import { request } from "./api";
+import ThreadList from "./components/ThreadList";
+import ChatPanel from "./components/ChatPanel";
+import { listThreads } from "./api/runtime";
+import type { ThreadDto } from "./api/runtime";
 
 type AgentResponse = {
   answer: string;
@@ -16,25 +17,73 @@ type AgentResponse = {
 
 export default function App() {
   const [selectedThread, setSelectedThread] = useState<ThreadDto | null>(null);
-  const [health, setHealth] = useState('尚未检查');
-  const [expression, setExpression] = useState('(12+8)*3');
-  const [result, setResult] = useState('');
+  const [threadEpoch, setThreadEpoch] = useState(0);
+  const selectionVersion = useRef(0);
+
+  function selectThread(thread: ThreadDto) {
+    ++selectionVersion.current;
+    setSelectedThread(thread);
+    // 只保留会话身份，用户消息与模型凭据不写进浏览器存储。
+    try {
+      localStorage.setItem("minideerflow.thread", thread.id);
+    } catch {
+      /* 隐私模式不妨碍使用 */
+    }
+  }
+
+  function updateThread(thread: ThreadDto) {
+    setSelectedThread((old) => (old?.id === thread.id ? thread : old));
+    setThreadEpoch((old) => old + 1);
+  }
+
+  useEffect(() => {
+    let live = true;
+    const version = selectionVersion.current;
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem("minideerflow.thread");
+    } catch {
+      return;
+    }
+    if (saved) {
+      // 刷新后用后端真实列表恢复选择，不凭本地 ID 编造一个会话。
+      listThreads()
+        .then((threads) => {
+          if (!live || version !== selectionVersion.current) return;
+          const thread = threads.find((item) => item.id === saved);
+          if (thread) setSelectedThread(thread);
+        })
+        .catch(() => {
+          /* ThreadList 独立展示列表加载错误 */
+        });
+    }
+    return () => {
+      live = false;
+    };
+  }, []);
+  const [health, setHealth] = useState("尚未检查");
+  const [expression, setExpression] = useState("(12+8)*3");
+  const [result, setResult] = useState("");
   const [healthBusy, setHealthBusy] = useState(false);
   const [calcBusy, setCalcBusy] = useState(false);
-  const [message, setMessage] = useState('请计算 (12+8)*3');
+  const [message, setMessage] = useState("请计算 (12+8)*3");
   const [agentBusy, setAgentBusy] = useState(false);
-  const [agentError, setAgentError] = useState('');
-  const [agentResponse, setAgentResponse] = useState<AgentResponse | null>(null);
+  const [agentError, setAgentError] = useState("");
+  const [agentResponse, setAgentResponse] = useState<AgentResponse | null>(
+    null,
+  );
 
   async function askAgent() {
     // 1. 清空上一次结果并显示等待态，防止把历史回答误认为当前请求的结果。
     setAgentBusy(true);
-    setAgentError('');
+    setAgentError("");
     setAgentResponse(null);
 
     try {
       // 2. 调用真实后端；回答与工具调用轨迹都来自服务端实际执行消息。
-      setAgentResponse(await request<AgentResponse>('/api/demo/agent', { message }));
+      setAgentResponse(
+        await request<AgentResponse>("/api/demo/agent", { message }),
+      );
     } catch (error) {
       setAgentError(String(error));
     } finally {
@@ -46,7 +95,7 @@ export default function App() {
   async function checkHealth() {
     setHealthBusy(true);
     try {
-      const data = await request<{ status: string }>('/health');
+      const data = await request<{ status: string }>("/health");
       setHealth(data.status);
     } catch (error) {
       setHealth(String(error));
@@ -57,9 +106,11 @@ export default function App() {
 
   async function compute() {
     setCalcBusy(true);
-    setResult('');
+    setResult("");
     try {
-      const data = await request<{ result: string }>('/api/demo/calculate', { expression });
+      const data = await request<{ result: string }>("/api/demo/calculate", {
+        expression,
+      });
       setResult(data.result);
     } catch (error) {
       setResult(String(error));
@@ -76,15 +127,23 @@ export default function App() {
       </header>
 
       <div className="thread-workbench">
-        <ThreadList selectedId={selectedThread?.id ?? null} onSelect={setSelectedThread} />
-        <ChatPanel key={selectedThread?.id ?? 'none'} thread={selectedThread} />
+        <ThreadList
+          selectedId={selectedThread?.id ?? null}
+          onSelect={selectThread}
+          refreshKey={threadEpoch}
+        />
+        <ChatPanel
+          key={selectedThread?.id ?? "none"}
+          thread={selectedThread}
+          onThreadUpdate={updateThread}
+        />
       </div>
 
       {/* 健康检查和计算器独立运行，不依赖模型配置。 */}
       <section>
         <h2>服务健康</h2>
         <button disabled={healthBusy} onClick={checkHealth}>
-          {healthBusy ? '检查中…' : '检查健康'}
+          {healthBusy ? "检查中…" : "检查健康"}
         </button>
         <output aria-live="polite">{health}</output>
       </section>
@@ -93,10 +152,13 @@ export default function App() {
         <h2>安全计算器</h2>
         <label>
           算式
-          <input value={expression} onChange={(event) => setExpression(event.target.value)} />
+          <input
+            value={expression}
+            onChange={(event) => setExpression(event.target.value)}
+          />
         </label>
         <button disabled={calcBusy} onClick={compute}>
-          {calcBusy ? '计算中…' : '计算'}
+          {calcBusy ? "计算中…" : "计算"}
         </button>
         <output aria-live="polite">{result}</output>
       </section>
@@ -113,7 +175,7 @@ export default function App() {
           />
         </label>
         <button disabled={agentBusy || !message.trim()} onClick={askAgent}>
-          {agentBusy ? '等待模型…' : '发送'}
+          {agentBusy ? "等待模型…" : "发送"}
         </button>
         {agentError && <output role="alert">{agentError}</output>}
 
@@ -128,7 +190,7 @@ export default function App() {
               agentResponse.tool_calls.map((call, index) => (
                 <article key={index}>
                   <strong>
-                    {index + 1}. {call.name} · {call.ok ? '成功' : '失败'}
+                    {index + 1}. {call.name} · {call.ok ? "成功" : "失败"}
                   </strong>
                   <pre>{JSON.stringify(call.args, null, 2)}</pre>
                   <output>{call.result}</output>
@@ -140,7 +202,8 @@ export default function App() {
       </section>
 
       <footer>
-        当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02-C 后台会话 Run / SSE。后续：Todo、文件。
+        当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02 会话记忆 / 后台 Run /
+        SSE。后续：Todo、文件。
       </footer>
     </main>
   );

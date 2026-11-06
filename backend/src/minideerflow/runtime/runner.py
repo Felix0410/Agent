@@ -110,6 +110,11 @@ class RunService:
     async def _execute_run(self, run: RunDto) -> None:
         """成功先验收消息再提交；失败只保存稳定错误码与保守恢复标志。"""
         graph_started = False
+
+        def mark_graph_started() -> None:
+            nonlocal graph_started
+            graph_started = True
+
         try:
             # 1. RUNNING 先提交，模型构造失败不代表已经修改 Graph。
             await self.repository.transition_run(run.id, RunStatus.CREATED, RunStatus.RUNNING)
@@ -117,13 +122,13 @@ class RunService:
             model = self.model_factory(self.settings)
             agent = build_lead_agent(model, [calculate], self.checkpointer)
             # 2. 整轮而非单次模型 HTTP 请求有时限；历史由 Checkpointer 自动传入。
-            graph_started = True
             async with asyncio.timeout(self.settings.model_timeout_seconds):
                 response = await stream_agent(
                     agent,
                     run.thread_id,
                     run.input_message,
                     event_sink=lambda kind, payload: self._emit(run.id, kind, payload),
+                    on_graph_start=mark_graph_started,
                 )
             # 3. 只有有效的本轮最终消息才能写入 SUCCEEDED。
             await self._emit(run.id, "assistant_final", {"answer": response.answer})

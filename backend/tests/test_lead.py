@@ -212,3 +212,31 @@ def test_tool_argument_validation_returns_error_message() -> None:
     response = asyncio.run(run_agent_once("Calculate", model=model))
     assert response.tool_calls[0].ok is False
     assert any(isinstance(m, ToolMessage) and m.tool_call_id == "bad-args" for m in model.seen[1])
+
+
+def test_cli_reuses_actual_agent_service(monkeypatch, capsys):
+    import sys
+
+    from minideerflow import cli
+
+    original = run_agent_once
+
+    async def fake_model_request(message):
+        return await original(
+            message, model=ScriptedModel(responses=[AIMessage(content="CLI answer")])
+        )
+
+    monkeypatch.setattr(cli, "run_agent_once", fake_model_request)
+    monkeypatch.setattr(sys, "argv", ["minideerflow.cli", "hello"])
+    assert cli.main() == 0
+    assert capsys.readouterr().out.strip() == "CLI answer"
+
+
+def test_cli_without_configuration_is_safe(monkeypatch, capsys):
+    import sys
+
+    from minideerflow import cli
+
+    monkeypatch.setattr(sys, "argv", ["minideerflow.cli", "hello"])
+    assert cli.main() == 1
+    assert "MODEL_NOT_CONFIGURED" in capsys.readouterr().err

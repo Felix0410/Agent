@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P02-A SQLite / Checkpointer / Thread API 与会话列表已实现并局部验证；P02-B/C/D 已完成联合设计、授权连续编码，尚未实现。P01/P02 最终 Demo 仍待用户人工验收。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P02-B/C/D 已实现并验证，P02 为 PENDING_REVIEW，等待用户手动验收；未进入 P03。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -61,7 +61,7 @@ uv run uvicorn minideerflow.main:app --host 127.0.0.1 --port 8000
 
 PyCharm 打开整个仓库，将解释器设为 `<仓库>/backend/.venv/bin/python`，右键 `backend/src/minideerflow/main.py` → Run 或 Debug 即可启动后端。Run/Debug 配置使用 Script path `<仓库>/backend/src/minideerflow/main.py`、Working Directory `<仓库>/backend`，无需 Parameters。直接运行入口监听 `127.0.0.1:8000`，不启用 reload，支持在 health 返回行设置断点；**图形界面配置和断点命中待用户实测**。原来的 Uvicorn Module 启动方式仍可用。
 
-当前 `/health` 只表示进程存活；已增加本地数据库与会话列表，后台 Run、SSE、多 Agent、Todo、文件与 RAG 尚未实现。
+当前 `/health` 只表示进程存活；P02 已支持会话记忆、后台 Run 与 SSE，多 Agent、Todo、文件与 RAG 尚未实现。
 
 ## P01 本地 Demo
 
@@ -90,7 +90,7 @@ npm run build
 npm run dev
 ```
 
-打开 http://127.0.0.1:5173 。Vite 将 `/health` 与 `/api` 代理到后端，无需 CORS；只监听回环地址。页面可检查健康、直接计算，并提交一次独立 Agent 请求、展示返回的最终答复与实际工具轨迹。没有会话历史，普通问答不调用工具时轨迹为空。未配置模型时 Agent 清晰返回 503，不影响计算器。
+打开 http://127.0.0.1:5173 。Vite 将 `/health` 与 `/api` 代理到后端，无需 CORS；只监听回环地址。P01 调试区可检查健康、直接计算，并提交独立 Agent 请求、展示最终答复与实际工具轨迹；该调试区不写会话历史，普通问答不调用工具时轨迹为空。上方 P02 会话工作台负责持久化多轮对话。未配置模型时 Agent 清晰返回 503，不影响计算器。
 
 已通过真实 HTTP 和浏览器验证：
 
@@ -120,55 +120,62 @@ uv run ruff check src tests
 uv run ruff format --check src tests
 ```
 
-最终实测 **59 passed**，Ruff 通过；`npm ci` 与 `npm run build` 通过。Mock 验证框架内模型→工具→模型链路，不能替代真实模型 Smoke；页面中的成功 Agent 回答/轨迹也尚未在真实提供方验证。详细记录见 [P01 进度](docs/progress/P01.md)。PyCharm 可直接运行/调试 main.py，模型配置填写根目录 `.env`；图形界面断点命中待人工验证。
+P01 初次交付实测 **59 passed**，Ruff 通过；`npm ci` 与 `npm run build` 通过。Mock 验证框架内模型→工具→模型链路，不能替代真实模型 Smoke；后续 P02 真实 HTTP/SSE 工具调用验证见下文。详细记录见 [P01 进度](docs/progress/P01.md)。PyCharm 可直接运行/调试 main.py，模型配置填写根目录 `.env`；图形界面断点命中待人工验证。
 
 参考上游：[bytedance/deer-flow v2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，固定 commit 为 `7e7f0410797693cf882594555ba414e0361d4c6f`。参考实现不等于复用全部源码；实际复制或改编受许可代码时保留适用的 MIT 版权与许可声明。
 
 
-## P02-A 会话与持久化
+## P02 会话 / 后台 Run / SSE Demo
 
-沿用上面的 PyCharm 或 Uvicorn 启动方式和 `npm run dev`。先在 `backend/` 执行 `uv sync --locked --group dev` 安装新增的 SQLite 依赖。启动自动创建默认 `backend/data/runtime.sqlite3` 和 `backend/data/checkpoints.sqlite3` 的父目录；业务表由项目初始化，检查点表由官方 Saver 按需建立，实际消息写入等待 B 接入。单 Worker 运行，不加 `--reload`。
-
-根目录 `.env` 可配置 `RUNTIME_DB_PATH`、`CHECKPOINT_DB_PATH`；相对路径以 `backend/` 为基准，不受 PyCharm 工作目录影响，两者必须不同。默认数据库目录已被 Git 忽略，修改成项目内其它路径时请相应忽略；不要提交实际库。`RUN_MAX_CONCURRENCY=2`、`RUN_QUEUE_SIZE=8` 已校验，但 A 尚无后台执行与排队能力。本地 `.env` 不会被模板覆盖。
-
-页面新增“会话工作台”：真实新建、刷新、切换会话，查看最近 Run 历史（A 新会话返回空数组），需恢复的会话会提示新建继续。会话聊天按钮禁用并明确标记 B 未实现；P01 单轮 Agent 仍是独立调试入口，不会写入所选 Thread。
-
-已通过临时数据库的真实 HTTP 与浏览器验证：
+后端沿用 PyCharm 直接 Run/Debug `backend/src/minideerflow/main.py`：**解释器务必选择 `backend/.venv/bin/python`，不是根目录 `.venv`**；工作目录 backend，无参数、无 reload、单 Worker。安装与终端启动：
 
 ```bash
-curl -i -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8000/api/threads
-curl -i http://127.0.0.1:8000/api/threads
+cd backend
+uv sync --locked --group dev
+uv run python src/minideerflow/main.py
 ```
 
-分别返回 201 的 ThreadDto 和 200 的真实列表。`GET /api/threads/{thread_id}/runs?limit=50` 返回 200 历史数组，不存在的 Thread 返回 404 `THREAD_NOT_FOUND`。默认 50 条、最多 100 条，截取最近 N 条后按时间正序返回；标题最多 100 字，空白标题拒绝。A 没有 Run 创建/查询单条/SSE API。
-
-P02-A 验证命令（后端在 `backend/`）：
+另一个终端运行前端：
 
 ```bash
-uv sync --locked --group dev
-uv run pytest -q tests/test_repository.py tests/test_checkpoint.py
-uv run pytest -q tests/test_config.py tests/test_health.py tests/test_lead.py tests/test_demo_api.py tests/test_calculator.py
+cd frontend
+npm ci
+npm run build
+npm run dev
+```
+
+打开 http://127.0.0.1:5173 ，新建/选择会话并发送消息。根目录 `.env` 自动读取模型配置（支持 Tool Calling）；无密钥时健康/计算/会话列表可用，Run 提交503且不残留任务。未改动用户 .env；默认两库在 backend/data 下、彼此独立。自定义相对路径以 backend 为基准，修改配置后重启。
+
+- POST 返回202仅表示已接收；2个worker、8个排队，同Thread只允许一个活动Run。满队列429，同会话忙/需恢复409。
+- 页面显示真实流式文字与工具开始/结果；最终文本覆盖临时片段，只有GET Run的持久化终态才确认成功。
+- 浏览器只在localStorage保存最近Thread ID；刷新后从服务端重新读取会话与最近50条Run历史（接口最多100条），不把Run文本拼成模型上下文。模型历史来自官方SQLite Checkpointer。
+- 同Thread正常多轮共享记忆，不同Thread隔离；正常关机先等待有限时间再取消并回收worker，然后关闭事件内存和两库。重新启动可以续接成功会话的Checkpoint。
+- 异常/超时可能留下部分Graph状态，Thread会标记需恢复，请新建会话继续。遗留CREATED/RUNNING在启动时FAILED/RUN_INTERRUPTED；不提供手动清除恢复标志、取消或无损续跑。
+- P01健康、计算器、一次性Agent和CLI全部保留，与P02会话工作台独立。
+
+API 操作：
+
+```bash
+curl -i -H 'Content-Type: application/json' -d '{"title":"测试会话"}' http://127.0.0.1:8000/api/threads
+# 用上一步返回的 id 替换 THREAD_ID
+curl -i -H 'Content-Type: application/json' -d '{"message":"请调用calculate计算(12+8)*3"}' http://127.0.0.1:8000/api/threads/THREAD_ID/runs
+# 用202返回的 run_id 替换 RUN_ID
+curl -N http://127.0.0.1:8000/api/runs/RUN_ID/events
+curl -i http://127.0.0.1:8000/api/runs/RUN_ID
+```
+
+SSE是有限内存窗口：512条/Run、64条/订阅者，终态后保留10分钟。Last-Event-ID可补发同Run后续事件；窗口缺口/过慢消费者明确stream_gap，过期410。页面至多三次原生重连，并以最多180次状态查询兜底；切换会话清理旧订阅，断线不取消后台Run。重启后事件窗口消失，但最终Run与Graph历史仍在。两库无跨库原子事务，不承诺Exactly-Once或永久事件回放。仅本机回环服务，无多用户鉴权。
+
+P02 本次局部验证（在 backend/）：
+
+```bash
+uv run pytest -q tests/test_runner.py tests/test_runs_api.py tests/test_events.py tests/test_repository.py tests/test_checkpoint.py tests/test_lead.py tests/test_demo_api.py tests/test_health.py tests/test_config.py tests/test_calculator.py
 uv run ruff check src tests
 uv run ruff format --check src tests
 ```
 
-本次新增持久化/API/Checkpoint 测试 **22 passed**，配置与 P01 直接受影响复验 **67 passed**；Ruff 与前端 `npm ci` / `npm run build` 通过。测试隔离本地 `.env` 和实际数据库，不调用真实模型。Fake 模型已证明 Checkpoint 关闭重开仍保留消息、同 Thread 连续对话、跨 Thread 隔离，以及真实工具消息 ID 的持久化；不能当作已交付后台多轮会话聊天。
+B 72 passed；C 94 passed；D最终136 passed（0 failed）。每一部分分别提交与记录，各阶段数量不能直接累加为独立用例总数。依赖锁检查、Ruff与TypeScript/Vite构建通过。Fake+临时两库验证重启恢复、消息隔离、工具ID/错误回执、SSE重连/gap、失败/队列与shutdown；真实浏览器验证创建/提交/工具轨迹/执行中刷新与历史恢复。
 
-资源由 lifespan 管理，退出反向关闭连接；业务库的遗留活动 Run 保守标记为 `FAILED/RUN_INTERRUPTED`，所属 Thread 标记需恢复，不宣称无损续跑。两库没有跨库原子事务。完整合同见 [P02 设计](docs/DEVELOPMENT.md)，实际进度见 [P02 记录](docs/progress/P02.md)；仅 A 待审核，不进入 B/C/D。
+真实模型独立Smoke：deepseek-flash，临时两库，三次HTTP202、SSE200、GET Run均SUCCEEDED。首轮记住测试口令、第二轮正确回答 Cedar-482；第三轮实际calculate(expression="(12+8)*3")返回60，SSE的tool_start/tool_end ID匹配，三轮收到真实文本增量。未记录密钥/认证头/模型隐藏内容；真实模型的重启后记忆和故障注入仅通过Fake覆盖，未额外消费额度。
 
-
-## P02-B/C/D 联合开发（等待编码）
-
-已完成联合设计：[P02-B/C/D 连续执行任务书](docs/tasks/P02-BD.md) 详细规定后台 Run、Graph SSE、页面流式聊天、历史和崩溃后保守恢复的逐文件编码、接口、状态一致性、假模型/真模型验证与验收。用户已授权 B→C→D 在同一次 Codex 会话中连续执行；**此处仅表示设计与授权，当前尚无 B/C/D 业务代码、测试或 Demo 结果**。
-
-## P02-B 后台 Run（本次增量）
-
-选择/新建会话后可以发送消息；202 仅表示任务入队，页面以有界轮询读取真实 CREATED/RUNNING/终态与保存的答案/工具结果。切换会话会清理旧轮询；刷新后从真实 Run 历史恢复。P01 单轮 Agent 和计算器调试区保留。
-
-新增 `POST /api/threads/{thread_id}/runs`（message）和 `GET /api/runs/{run_id}`。同会话活动任务 409，模型缺配置 503 且不创建 Run，队列满 429；后台最多 2 个 worker、8 个排队。Graph 超时/失败只写 FAILED 和稳定错误码，已进入 Graph 的会话保守标记需恢复；可新建会话继续。B 尚无 SSE。
-
-## P02-C 流式事件（本次增量）
-
-会话 Run 已接入 `GET /api/runs/{run_id}/events` SSE：实际模型文本、工具开始/结果和最终回答。前端按 message_id 拼临时文本、按工具 ID 显示调用；最终回答覆盖临时文本，终态仍重新 GET Run 确认。
-
-每 Run 512 条内存事件，每订阅者64条通知，终态窗口10分钟；Last-Event-ID 可补发同 Run 后续事件。过慢/丢失窗口明确 stream_gap 后停止拼接，过期返回410；页面有限重连/轮询兜底。断线不取消后台任务，重启不保留 SSE 内存历史。事件不是永久日志或 Exactly-Once 承诺。
+PyCharm GUI断点和用户最终Demo验收待人工完成。开发使用的临时Fake/真实Smoke服务不是正常启动配置；完成后会关闭并删除临时库，用户需自行启动后端。详细SHA、真实命令、失败修复与推送状态见 [P02进度](docs/progress/P02.md)。不合并main、不开始P03。
