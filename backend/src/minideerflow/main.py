@@ -21,6 +21,7 @@ from minideerflow.runtime.plan_service import PlanService
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.runner import RunService
 from minideerflow.runtime.task_registry import TaskRegistry
+from minideerflow.tools.mcp_adapter import register_mcp_tools
 from minideerflow.tools.registry import ToolRegistry, register_builtin_tools
 from minideerflow.workspace.repository import WorkspaceRepository
 from minideerflow.workspace.service import WorkspaceService
@@ -62,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stack.push_async_callback(registry.shutdown)
         tool_registry = ToolRegistry()
         register_builtin_tools(tool_registry)
+        await register_mcp_tools(tool_registry, settings.mcp_config_path)
         tool_registry.freeze()
         app.state.tool_registry = tool_registry
         runner = RunService(

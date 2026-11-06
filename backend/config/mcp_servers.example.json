@@ -1,0 +1,15 @@
+{
+  "servers": [
+    {
+      "id": "demo",
+      "transport": "streamable_http",
+      "url": "http://127.0.0.1:8765/mcp",
+      "tools": [
+        {
+          "name": "lookup_fact",
+          "schema_sha256": "bb4d0dd3eb360c06d10f7c9b59a01324cd9435f32722da5d12fc5f0e5167e2c3"
+        }
+      ]
+    }
+  ]
+}

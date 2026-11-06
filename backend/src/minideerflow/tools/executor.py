@@ -1,7 +1,9 @@
 """官方ToolNode外层守卫：不另写执行循环，不重试handler。"""
 
 import asyncio
+import json
 
+from jsonschema import ValidationError as JSONSchemaError
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
@@ -50,30 +52,56 @@ class ToolGuardMiddleware(AgentMiddleware):
             ):
                 raise ToolPolicyError("TOOL_NOT_ALLOWED")
             await context.workspace_service.repository.check_run(context.thread_id, context.run_id)
+            if (
+                definition.source == "mcp"
+                and len(json.dumps(args, ensure_ascii=False).encode("utf-8")) > 2048
+            ):
+                raise ToolPolicyError("TOOL_INVALID_ARGS")
             schema = definition.tool.tool_call_schema
             public_schema = schema if isinstance(schema, dict) else schema.model_json_schema()
             # 部分既有Pydantic工具默认忽略extra；守卫必须显式拒绝模型伪造字段。
             if args.keys() - public_schema.get("properties", {}).keys():
                 raise ToolPolicyError("TOOL_INVALID_ARGS")
             if isinstance(schema, dict):
-                # MCP JSONSchema在B安装官方SDK后由其验证器支持。
+                # MCP原始JSONSchema由标准验证器检查，不改写参数契约。
                 from jsonschema import validate
 
                 validate(args, schema)
             else:
                 schema.model_validate(args, strict=True)
             # 2. 官方handler负责注入runtime；只执行一次，Command原对象直接返回。
-            return await asyncio.wait_for(handler(request), timeout=definition.timeout_seconds)
+            result = await asyncio.wait_for(handler(request), timeout=definition.timeout_seconds)
+            if definition.source == "mcp":
+                # MCP仅允许纯文本，原始错误/结构化artifact已由SDK拦截器清理。
+                if not isinstance(result, ToolMessage):
+                    raise ToolPolicyError("MCP_TOOL_ERROR")
+                content = result.content
+                text = (
+                    content
+                    if isinstance(content, str)
+                    else "\n".join(
+                        c.get("text", "")
+                        for c in content
+                        if isinstance(c, dict) and c.get("type") == "text"
+                    )
+                )
+                result = result.model_copy(update={"content": text, "artifact": None})
+            return result
         except asyncio.CancelledError:
             raise
         except TimeoutError:
             code = "TOOL_TIMEOUT"
-        except (ValidationError, TypeError, ValueError):
+            if definition is not None and definition.source == "mcp":
+                self.registry.mark_origin_offline(definition.origin)
+        except (ValidationError, JSONSchemaError, TypeError, ValueError):
             code = "TOOL_INVALID_ARGS"
         except ToolPolicyError as exc:
             code = exc.code
         except Exception:  # noqa: BLE001 - Provider/文件路径/认证异常不能输出给模型
             code = "TOOL_EXECUTION_FAILED"
+            if definition is not None and definition.source == "mcp":
+                code = "MCP_UNAVAILABLE"
+                self.registry.mark_origin_offline(definition.origin)
         # 3. 不把超时写操作当失败可重试；结果未知，由用户/后续工具复核。
         return ToolMessage(
             content=f"ERROR[{code}]: Tool call failed; do not retry writes automatically",

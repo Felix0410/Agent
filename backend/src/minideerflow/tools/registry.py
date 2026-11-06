@@ -40,6 +40,7 @@ class ToolRegistry:
     def __init__(self):
         self._tools: dict[str, ToolDefinition] = {}
         self._frozen = False
+        self._offline: set[str] = set()
         self._unavailable: list[dict] = []
 
     def register(self, definition: ToolDefinition):
@@ -64,20 +65,24 @@ class ToolRegistry:
         return self
 
     def get(self, name: str) -> ToolDefinition:
+        if name in self._offline:
+            raise ToolPolicyError("MCP_UNAVAILABLE")
         if name not in self._tools:
             raise ToolPolicyError("TOOL_NOT_ALLOWED")
         return self._tools[name]
 
     @property
     def names(self) -> frozenset[str]:
-        return frozenset(self._tools)
+        return frozenset(self._tools.keys() - self._offline)
 
     def list_allowed(self, policy: ToolPolicy) -> list[BaseTool]:
         """默认DENY；名字与能力级别必须同时获准。"""
         return [
             d.tool
             for n, d in sorted(self._tools.items())
-            if n in policy.allowed_names and d.permission in policy.allowed_permissions
+            if n not in self._offline
+            and n in policy.allowed_names
+            and d.permission in policy.allowed_permissions
         ]
 
     def mark_unavailable(self, name: str, origin: str, code: str, source="mcp"):
@@ -94,6 +99,12 @@ class ToolRegistry:
             }
         )
 
+    def mark_origin_offline(self, origin: str):
+        """断连只收回调用能力，不可在运行时恢复/新增工具；恢复需重启。"""
+        self._offline.update(
+            n for n, d in self._tools.items() if d.source == "mcp" and d.origin == origin
+        )
+
     def list_catalog(self) -> list[dict]:
         """不向页面返回schema长文本、地址、文件路径或认证信息。"""
         return sorted(
@@ -103,7 +114,7 @@ class ToolRegistry:
                     "source": d.source,
                     "permission": d.permission,
                     "origin": d.origin,
-                    "availability": "available",
+                    "availability": "MCP_UNAVAILABLE" if d.name in self._offline else "available",
                 }
                 for d in self._tools.values()
             ]

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     app_env: Literal["development", "test", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    mcp_config_path: Path | None = None
     model_name: str | None = None
     model_api_key: SecretStr | None = None
     model_base_url: str | None = None
@@ -37,6 +38,15 @@ class Settings(BaseSettings):
     subagent_recursion_limit: int = Field(default=14, ge=2, le=14)
     max_subagent_concurrency: int = Field(default=3, ge=1, le=3)
     max_subagent_calls_per_run: int = Field(default=4, ge=1, le=4)
+
+    @field_validator("mcp_config_path", mode="before")
+    @classmethod
+    def mcp_path(cls, value):
+        """空配置不连接；相对路径以backend为准，不依赖IDE工作目录。"""
+        if value is None or value == "":
+            return None
+        path = Path(value).expanduser()
+        return path if path.is_absolute() else Path(__file__).resolve().parents[2] / path
 
     @field_validator("runtime_db_path", "checkpoint_db_path", mode="before")
     @classmethod
