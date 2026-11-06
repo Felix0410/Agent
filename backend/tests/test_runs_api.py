@@ -88,3 +88,76 @@ def test_queue_full_api_does_not_create_ghost(monkeypatch):
         assert response.status_code == 429
         assert client.get(f"/api/threads/{threads[-1]}/runs").json() == []
         client.portal.call(app.state.runner.shutdown, 0.01)
+
+
+def parse_events(text):
+    import json
+
+    return [json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: ")]
+
+
+def test_sse_frame_replay_cursor_and_preflight(monkeypatch):
+    monkeypatch.setattr(runner, "build_chat_model", fake_factory)
+    app = create_app()
+    with TestClient(app) as client:
+        thread = client.post("/api/threads", json={}).json()["id"]
+        accepted = client.post(f"/api/threads/{thread}/runs", json={"message": "hello"}).json()
+        drain(client, app)
+        run_id = accepted["run_id"]
+        response = client.get(f"/api/runs/{run_id}/events")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert response.headers["cache-control"] == "no-cache"
+        assert response.headers["x-accel-buffering"] == "no"
+        events = parse_events(response.text)
+        assert events[0]["type"] == "run_start" and events[-1]["type"] == "run_end"
+        assert all(e["run_id"] == run_id for e in events)
+        assert [e["event_id"] for e in events] == [f"{run_id}:{i + 1}" for i in range(len(events))]
+        cursor = events[0]["event_id"]
+        replay = parse_events(
+            client.get(f"/api/runs/{run_id}/events", headers={"Last-Event-ID": cursor}).text
+        )
+        assert replay == events[1:]
+        assert (
+            client.get(
+                f"/api/runs/{run_id}/events", headers={"Last-Event-ID": "wrong:1"}
+            ).status_code
+            == 422
+        )
+        assert client.get("/api/runs/missing/events").status_code == 404
+        app.state.events._clock = lambda: float("inf")
+        expired = client.get(f"/api/runs/{run_id}/events")
+        assert expired.status_code == 410
+        assert expired.json()["detail"]["code"] == "EVENT_STREAM_EXPIRED"
+        assert client.get(f"/api/runs/{run_id}").json()["status"] == "SUCCEEDED"
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_terminal_event_only_after_database_commit(monkeypatch, fail):
+    monkeypatch.setattr(runner, "build_chat_model", fake_factory)
+    if fail:
+
+        async def broken(*args, **kwargs):
+            raise RuntimeError("private-secret")
+
+        monkeypatch.setattr(runner, "stream_agent", broken)
+    app = create_app()
+    with TestClient(app) as client:
+        original = app.state.events.publish
+        observed = []
+
+        async def checked(run_id, kind, payload):
+            if kind == "run_end":
+                saved = await app.state.repository.get_run(run_id)
+                assert saved.status.value == payload["status"]
+                observed.append(payload["status"])
+            return await original(run_id, kind, payload)
+
+        app.state.events.publish = checked
+        thread = client.post("/api/threads", json={}).json()["id"]
+        accepted = client.post(f"/api/threads/{thread}/runs", json={"message": "test"}).json()
+        drain(client, app)
+        events = parse_events(client.get("/api/runs/" + accepted["run_id"] + "/events").text)
+        assert observed == ["FAILED" if fail else "SUCCEEDED"]
+        assert events[-1]["payload"]["status"] == observed[0]
+        assert "private-secret" not in str(events)

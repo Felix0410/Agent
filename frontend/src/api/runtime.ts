@@ -1,4 +1,4 @@
-/** P02-A 会话 API；此阶段不提供 Run 提交或流式订阅。 */
+/** P02 会话、Run 与有限 SSE 订阅；不向浏览器提供任何模型凭据。 */
 import { request } from '../api';
 
 export type ThreadDto = {
@@ -51,4 +51,71 @@ export function getRun(runId: string): Promise<RunDto> {
 
 export function isTerminal(run: RunDto): boolean {
   return ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(run.status);
+}
+
+export type RunEvent = {
+  event_id: string;
+  run_id: string;
+  thread_id: string;
+  type: string;
+  timestamp: string;
+  payload: Record<string, unknown>;
+};
+
+/** 有限原生重连；自定义事件必须显式注册，过期/缺口交给 GET Run 兜底。 */
+export function subscribeRunEvents(
+  runId: string, threadId: string,
+  onEvent: (event: RunEvent) => void, onUnavailable: () => void,
+): () => void {
+  const source = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events`);
+  let sequence = 0;
+  let reconnects = 0;
+  let closed = false;
+  const stop = () => { closed = true; source.close(); };
+  const unavailable = () => { stop(); onUnavailable(); };
+  const kinds = ['run_start', 'assistant_delta', 'tool_start', 'tool_end',
+    'assistant_final', 'error', 'run_end', 'stream_gap'];
+  // 1. 校验当前 Run/Thread 与递增 ID，避免重放或切换时把旧数据串入新会话。
+  for (const kind of kinds) {
+    source.addEventListener(kind, (raw) => {
+      if (closed || !(raw instanceof MessageEvent)) return;
+      try {
+        const event = JSON.parse(raw.data) as RunEvent;
+        if (event.run_id !== runId || event.thread_id !== threadId || event.type !== kind ||
+            !event.payload || typeof event.payload !== 'object') {
+          unavailable();
+          return;
+        }
+        if (kind === 'stream_gap') {
+          stop();
+          onEvent(event);
+          return;
+        }
+        const prefix = `${runId}:`;
+        const suffix = event.event_id?.startsWith(prefix) ? event.event_id.slice(prefix.length) : '';
+        if (!/^[1-9][0-9]*$/.test(suffix) || !Number.isSafeInteger(Number(suffix))) {
+          unavailable();
+          return;
+        }
+        const next = Number(suffix);
+        if (next <= sequence) return;
+        if (next !== sequence + 1) {
+          unavailable();
+          return;
+        }
+        sequence = next;
+        if (kind === 'run_end') stop();
+        onEvent(event);
+      } catch {
+        unavailable();
+      }
+    });
+  }
+  // 2. 断线只表示流暂不可用，不是模型失败；超过三次则关闭并有限轮询。
+  source.onerror = (event) => {
+    // 服务端 error 是带数据的业务事件，不能误算成网络重连失败。
+    if (event instanceof MessageEvent) return;
+    if (!closed && ++reconnects >= 3) unavailable();
+  };
+  return stop;
 }

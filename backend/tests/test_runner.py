@@ -21,12 +21,14 @@ def fake_factory(settings):
 
 
 @asynccontextmanager
-async def running_service(tmp_path: Path, factory=fake_factory, **settings):
+async def running_service(tmp_path: Path, factory=fake_factory, events=None, **settings):
     db = await RuntimeDatabase.open(tmp_path / "runtime.db")
     await db.init_schema()
     repo = RuntimeRepository(db)
     async with open_checkpointer(tmp_path / "checkpoints.db") as saver:
-        service = RunService(repo, saver, Settings(**settings), model_factory=factory)
+        service = RunService(
+            repo, saver, Settings(**settings), model_factory=factory, events=events
+        )
         service.start()
         try:
             yield service, repo
@@ -262,5 +264,183 @@ def test_enqueue_failure_has_no_live_created_row(tmp_path, monkeypatch):
             runs = await repo.list_runs(thread.id)
             assert len(runs) == 1 and runs[0].status == RunStatus.FAILED
             assert runs[0].error_code == "RUN_INTERRUPTED"
+
+    asyncio.run(scenario())
+
+
+def test_streaming_events_tool_ids_and_history_isolation(tmp_path):
+    from minideerflow.runtime.events import EventBus
+
+    def factory(settings):
+        return ScriptedModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"id": "actual-call", "name": "calculate", "args": {"expression": "1/0"}}
+                    ],
+                ),
+                AIMessage(content="cannot divide by zero"),
+            ]
+        )
+
+    async def scenario():
+        bus = EventBus()
+        async with running_service(tmp_path, factory, events=bus) as (service, repo):
+            thread = await repo.create_thread()
+            accepted = await service.start_run(thread.id, "calculate")
+            await finished(service)
+            events = list(bus._runs[accepted.run_id].events)
+            start = next(e for e in events if e.type == "tool_start")
+            end = next(e for e in events if e.type == "tool_end")
+            assert start.payload["tool_call_id"] == end.payload["tool_call_id"] == "actual-call"
+            assert end.payload["ok"] is False and end.payload["result"].startswith("ERROR[")
+            assert events[-1].type == "run_end"
+            service.model_factory = fake_factory
+            other = await service.start_run(thread.id, "normal reply")
+            await finished(service)
+            assert not any(e.type.startswith("tool_") for e in bus._runs[other.run_id].events)
+
+    asyncio.run(scenario())
+
+
+def test_disconnect_does_not_cancel_run(tmp_path, monkeypatch):
+    from minideerflow.runtime import runner
+    from minideerflow.runtime.events import EventBus
+
+    original = runner.stream_agent
+
+    async def scenario():
+        gate = asyncio.Event()
+
+        async def slow(*args, **kwargs):
+            await gate.wait()
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(runner, "stream_agent", slow)
+        bus = EventBus()
+        async with running_service(tmp_path, events=bus) as (service, repo):
+            thread = await repo.create_thread()
+            accepted = await service.start_run(thread.id, "hello")
+            sub = await bus.subscribe(accepted.run_id)
+            await bus.unsubscribe(accepted.run_id, sub)
+            gate.set()
+            await finished(service)
+            assert (await repo.get_run(accepted.run_id)).status == RunStatus.SUCCEEDED
+
+    asyncio.run(scenario())
+
+
+def test_persistence_failure_never_publishes_success(tmp_path, monkeypatch, caplog):
+    from minideerflow.runtime.events import EventBus
+
+    async def scenario():
+        bus = EventBus()
+        async with running_service(tmp_path, events=bus) as (service, repo):
+            thread = await repo.create_thread()
+
+            async def broken(*args, **kwargs):
+                raise RuntimeError("private-db-error")
+
+            monkeypatch.setattr(repo, "complete_run", broken)
+            accepted = await service.start_run(thread.id, "hello")
+            await finished(service)
+            events = bus._runs[accepted.run_id].events
+            assert not any(e.type == "run_end" for e in events)
+            assert (await repo.get_run(accepted.run_id)).status == RunStatus.RUNNING
+
+    asyncio.run(scenario())
+    assert "persistence failed" in caplog.text
+    assert "private-db-error" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "mode", ["valid", "duplicate_update", "unmatched", "duplicate_call", "invalid_final"]
+)
+def test_stream_message_validation_and_delta_filters(mode):
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessageChunk, ToolMessage
+
+    from minideerflow.runtime.streaming import stream_agent
+
+    old = AIMessage(id="old", content="historical answer")
+    call = AIMessage(
+        id="call-message",
+        content="",
+        tool_calls=[{"id": "c", "name": "calculate", "args": {"expression": "1+1"}}],
+    )
+    tool = ToolMessage(id="receipt", tool_call_id="c", content="2")
+    final = AIMessage(id="final", content="2")
+    frames = [
+        ("messages", (AIMessageChunk(id="old", content="history"), {"langgraph_node": "model"})),
+        (
+            "messages",
+            (
+                ToolMessage(id="noise", content="tool text", tool_call_id="z"),
+                {"langgraph_node": "tools"},
+            ),
+        ),
+        (
+            "messages",
+            (
+                AIMessageChunk(
+                    id="tool-chunk",
+                    content="",
+                    tool_call_chunks=[{"id": "c", "name": "calculate", "args": "{}", "index": 0}],
+                ),
+                {"langgraph_node": "model"},
+            ),
+        ),
+        ("updates", {"model": {"messages": [old, call]}}),
+        ("updates", {"tools": {"messages": [tool]}}),
+        ("messages", (AIMessageChunk(id="final", content="2"), {"langgraph_node": "model"})),
+        ("updates", {"model": {"messages": [final]}}),
+    ]
+    if mode == "duplicate_update":
+        frames.insert(5, ("updates", {"tools": {"messages": [tool]}}))
+    if mode == "unmatched":
+        frames[4] = (
+            "updates",
+            {"tools": {"messages": [ToolMessage(id="wrong", content="x", tool_call_id="missing")]}},
+        )
+    if mode == "duplicate_call":
+        frames.insert(
+            4,
+            (
+                "updates",
+                {"model": {"messages": [call.model_copy(update={"id": "other-call-message"})]}},
+            ),
+        )
+    if mode == "invalid_final":
+        final.content = ""
+
+    class Graph:
+        reads = 0
+
+        async def aget_state(self, config):
+            self.reads += 1
+            return SimpleNamespace(
+                values={"messages": [old] if self.reads == 1 else [old, call, tool, final]}
+            )
+
+        async def astream(self, *args, **kwargs):
+            for frame in frames:
+                yield frame
+
+    async def scenario():
+        events = []
+
+        async def sink(kind, payload):
+            events.append((kind, payload))
+
+        if mode in ["unmatched", "duplicate_call", "invalid_final"]:
+            with pytest.raises(ValueError):
+                await stream_agent(Graph(), "thread", "hello", sink)
+        else:
+            response = await stream_agent(Graph(), "thread", "hello", sink)
+            assert response.answer == "2" and len(response.tool_calls) == 1
+            assert [kind for kind, payload in events].count("tool_end") == 1
+            assert [p["text"] for k, p in events if k == "assistant_delta"] == ["2"]
 
     asyncio.run(scenario())

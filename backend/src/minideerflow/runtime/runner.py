@@ -11,6 +11,7 @@ from minideerflow.agents.lead import build_lead_agent
 from minideerflow.agents.service import AgentExecutionError, validate_message
 from minideerflow.config import Settings
 from minideerflow.core.model import ModelNotConfigured, build_chat_model
+from minideerflow.runtime.events import EventBus
 from minideerflow.runtime.models import RunAccepted, RunDto, RunStatus
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.streaming import stream_agent
@@ -36,8 +37,10 @@ class RunService:
         checkpointer,
         settings: Settings,
         *,
+        events: EventBus | None = None,
         model_factory: Callable[[Settings], BaseChatModel] | None = None,
     ) -> None:
+        self.events = events
         self.repository = repository
         self.checkpointer = checkpointer
         self.settings = settings
@@ -78,6 +81,8 @@ class RunService:
                 raise RunServiceError("RUN_QUEUE_FULL", "Run queue is full", 429)
             run = await self.repository.create_run(thread_id, message)
             try:
+                if self.events is not None:
+                    await self.events.ensure_run(run.id, thread_id)
                 self.queue.put_nowait(run.id)
             except BaseException:
                 await self.repository.complete_run(
@@ -108,19 +113,29 @@ class RunService:
         try:
             # 1. RUNNING 先提交，模型构造失败不代表已经修改 Graph。
             await self.repository.transition_run(run.id, RunStatus.CREATED, RunStatus.RUNNING)
+            await self._emit(run.id, "run_start", {"status": "RUNNING"})
             model = self.model_factory(self.settings)
             agent = build_lead_agent(model, [calculate], self.checkpointer)
             # 2. 整轮而非单次模型 HTTP 请求有时限；历史由 Checkpointer 自动传入。
             graph_started = True
             async with asyncio.timeout(self.settings.model_timeout_seconds):
-                response = await stream_agent(agent, run.thread_id, run.input_message)
+                response = await stream_agent(
+                    agent,
+                    run.thread_id,
+                    run.input_message,
+                    event_sink=lambda kind, payload: self._emit(run.id, kind, payload),
+                )
             # 3. 只有有效的本轮最终消息才能写入 SUCCEEDED。
+            await self._emit(run.id, "assistant_final", {"answer": response.answer})
             await self.repository.complete_run(
                 run.id,
                 status=RunStatus.SUCCEEDED,
                 answer=response.answer,
                 tool_calls=response.tool_calls,
             )
+            await self._emit(run.id, "run_end", {"status": "SUCCEEDED"})
+            if self.events is not None:
+                await self.events.close_run(run.id)
         except asyncio.CancelledError:
             await self._fail_run(run.id, "RUN_INTERRUPTED", graph_started)
             raise
@@ -140,8 +155,17 @@ class RunService:
             await self.repository.complete_run(
                 run_id, status=RunStatus.FAILED, error_code=code, needs_recovery=graph_started
             )
+            await self._emit(run_id, "error", {"code": code, "message": "Run execution failed"})
+            await self._emit(run_id, "run_end", {"status": "FAILED"})
+            if self.events is not None:
+                await self.events.close_run(run_id)
         except Exception:  # noqa: BLE001 - 不能以伪造成功掩盖持久化失败
             logger.error("Run failure persistence failed (run_id=%s)", run_id)
+
+    async def _emit(self, run_id: str, kind: str, payload: dict) -> None:
+        """事件可用于观察，终态成功只能在 Repository 提交之后发出。"""
+        if self.events is not None:
+            await self.events.publish(run_id, kind, payload)
 
     async def shutdown(self, grace_seconds: float = 2) -> None:
         """先停止准入并有限等待，再取消/回收所有任务，最后清理排队记录。"""

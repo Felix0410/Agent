@@ -140,7 +140,7 @@ export default function App() {
       </section>
 
       <footer>
-        当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02-B 后台会话 Run。后续：SSE、Todo、文件。
+        当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02-C 后台会话 Run / SSE。后续：Todo、文件。
       </footer>
     </main>
   );

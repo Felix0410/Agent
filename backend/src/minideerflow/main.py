@@ -12,6 +12,7 @@ from minideerflow.api.threads import router as threads_router
 from minideerflow.config import get_settings
 from minideerflow.runtime.checkpoints import open_checkpointer
 from minideerflow.runtime.db import RuntimeDatabase
+from minideerflow.runtime.events import EventBus
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.runner import RunService
 
@@ -34,7 +35,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.checkpointer = saver
         app.state.repository = repository
         # 3. worker 退出必须先于 Saver/DB 关闭，避免运行中的 Graph 使用已关闭连接。
-        runner = RunService(repository, saver, settings)
+        events = EventBus()
+        events.start()
+        stack.push_async_callback(events.shutdown)
+        app.state.events = events
+        runner = RunService(repository, saver, settings, events=events)
         runner.start()
         stack.push_async_callback(runner.shutdown)
         app.state.runner = runner

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { getRun, isTerminal, listRuns, startRun } from '../api/runtime';
+import { getRun, isTerminal, listRuns, startRun, subscribeRunEvents } from '../api/runtime';
 import type { RunDto, ThreadDto } from '../api/runtime';
 import RunStatus from './RunStatus';
+import type { LiveRun } from './RunStatus';
 
 /** 单会话的历史和后台 Run；切换会话时由 App 的 key 重新建立独立生命周期。 */
 export default function ChatPanel({ thread }: { thread: ThreadDto | null }) {
@@ -10,6 +11,8 @@ export default function ChatPanel({ thread }: { thread: ThreadDto | null }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [liveRun, setLiveRun] = useState<LiveRun>({ fragments: {}, answer: null, tools: {} });
+  const [streamNotice, setStreamNotice] = useState('');
   const [activeRun, setActiveRun] = useState<string | null>(null);
   const [recovering, setRecovering] = useState(thread?.needs_recovery ?? false);
 
@@ -33,29 +36,74 @@ export default function ChatPanel({ thread }: { thread: ThreadDto | null }) {
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     let attempts = 0;
-    // 2. 串行有限轮询，不叠加请求；断网不代表后台模型失败。
+    let version = 0;
+    setLiveRun({ fragments: {}, answer: null, tools: {} });
+    setStreamNotice('');
+    // 1. 任何流终态都要重新 GET；版本号防止较早的 RUNNING 响应覆盖新终态。
     async function poll() {
+      clearTimeout(timer);
+      const ticket = ++version;
       try {
         const run = await getRun(activeRun!);
-        if (!live) return;
+        if (!live || ticket !== version) return;
         setRuns((old) => [...old.filter((item) => item.id !== run.id), run]);
         if (isTerminal(run)) {
+          stopStream();
           setActiveRun(null);
           if (run.status === 'FAILED' && run.started_at) setRecovering(true);
           return;
         }
       } catch (reason) {
-        if (live) setError(String(reason));
+        if (live && ticket === version) setError(String(reason));
       }
-      if (!live) return;
+      if (!live || ticket !== version) return;
       if (++attempts >= 180) {
-        setError('状态查询已达上限，请刷新页面重新查询；后台任务不会被取消。');
+        stopStream();
+        setError('状态查询已达上限，请刷新重新查询；后台任务不会被取消。');
         return;
       }
       timer = setTimeout(poll, 1000);
     }
+    // 2. Token 按 message_id 分组；最终文本覆盖临时片段，工具按真实调用 ID 配对。
+    const stopStream = subscribeRunEvents(activeRun, thread.id, (event) => {
+      if (!live) return;
+      const p = event.payload;
+      if (event.type === 'assistant_delta' && typeof p.message_id === 'string' && typeof p.text === 'string') {
+        const id = p.message_id;
+        const text = p.text;
+        setLiveRun((old) => ({ ...old, fragments: {...old.fragments, [id]: (old.fragments[id] ?? '') + text} }));
+      } else if (event.type === 'assistant_final' && typeof p.answer === 'string') {
+        const answer = p.answer;
+        setLiveRun((old) => ({...old, answer}));
+      } else if (event.type === 'tool_start' && typeof p.tool_call_id === 'string' && typeof p.name === 'string') {
+        const id = p.tool_call_id;
+        const name = p.name;
+        setLiveRun((old) => ({...old, tools: {...old.tools, [id]: {name, args:p.args}}}));
+      } else if (event.type === 'tool_end' && typeof p.tool_call_id === 'string' && typeof p.result === 'string' && typeof p.ok === 'boolean') {
+        const id = p.tool_call_id;
+        const result = p.result;
+        const ok = p.ok;
+        setLiveRun((old) => old.tools[id] ? ({...old, tools:{...old.tools, [id]:{...old.tools[id],result,ok}}}) : old);
+      } else if (event.type === 'run_end' || event.type === 'stream_gap') {
+        stopStream();
+        if (event.type === 'stream_gap') {
+          setLiveRun({fragments:{},answer:null,tools:{}});
+          setStreamNotice('流有缺口，已停止拼接，正在查询服务端状态。');
+        }
+        void poll();
+      }
+    }, () => {
+      if (!live) return;
+      setStreamNotice('流暂不可用，正在查询服务端状态；后台仍继续执行。');
+      void poll();
+    });
+    // 3. 轮询是断线/过期兜底；切换只关闭本地订阅，不向后端发送取消。
     void poll();
-    return () => { live = false; clearTimeout(timer); };
+    return () => {
+      live = false;
+      clearTimeout(timer);
+      stopStream();
+    };
   }, [activeRun, thread?.id]);
 
   async function send() {
@@ -80,8 +128,9 @@ export default function ChatPanel({ thread }: { thread: ThreadDto | null }) {
       <h2>{thread ? `当前会话：${thread.title}` : '请选择会话'}</h2>
       {loading && <p>正在加载历史…</p>}
       {!loading && thread && runs.length === 0 && <p>此会话暂无 Run 历史。</p>}
-      {runs.map((run) => <RunStatus key={run.id} run={run} />)}
+      {runs.map((run) => <RunStatus key={run.id} run={run} live={run.id === activeRun ? liveRun : undefined} />)}
       {recovering && <p role="alert">此会话需恢复，请新建会话继续。</p>}
+      {streamNotice && <p role="status">{streamNotice}</p>}
       {error && <output role="alert">{error}</output>}
       <label>会话消息
         <textarea maxLength={2000} value={message} onChange={(event) => setMessage(event.target.value)} />

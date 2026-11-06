@@ -166,3 +166,9 @@ uv run ruff format --check src tests
 选择/新建会话后可以发送消息；202 仅表示任务入队，页面以有界轮询读取真实 CREATED/RUNNING/终态与保存的答案/工具结果。切换会话会清理旧轮询；刷新后从真实 Run 历史恢复。P01 单轮 Agent 和计算器调试区保留。
 
 新增 `POST /api/threads/{thread_id}/runs`（message）和 `GET /api/runs/{run_id}`。同会话活动任务 409，模型缺配置 503 且不创建 Run，队列满 429；后台最多 2 个 worker、8 个排队。Graph 超时/失败只写 FAILED 和稳定错误码，已进入 Graph 的会话保守标记需恢复；可新建会话继续。B 尚无 SSE。
+
+## P02-C 流式事件（本次增量）
+
+会话 Run 已接入 `GET /api/runs/{run_id}/events` SSE：实际模型文本、工具开始/结果和最终回答。前端按 message_id 拼临时文本、按工具 ID 显示调用；最终回答覆盖临时文本，终态仍重新 GET Run 确认。
+
+每 Run 512 条内存事件，每订阅者64条通知，终态窗口10分钟；Last-Event-ID 可补发同 Run 后续事件。过慢/丢失窗口明确 stream_gap 后停止拼接，过期返回410；页面有限重连/轮询兜底。断线不取消后台任务，重启不保留 SSE 内存历史。事件不是永久日志或 Exactly-Once 承诺。

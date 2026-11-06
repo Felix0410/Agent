@@ -3,7 +3,7 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
 
 from minideerflow.agents.service import (
     AgentResponse,
@@ -25,12 +25,33 @@ async def stream_agent(
     old_ids = {m.id for m in previous.values.get("messages", []) if m.id}
     current: list[BaseMessage] = []
     indexed: dict[str, BaseMessage] = {}
-    # 2. updates 包含完成的模型/工具消息；messages 增量将在 C 映射为 SSE。
+    calls: dict[str, dict] = {}
+    completed: set[str] = set()
+
+    async def emit(kind: str, payload: dict[str, Any]) -> None:
+        if event_sink is not None:
+            await event_sink(kind, payload)
+
+    # 2. messages 只转换真实模型文本，updates 才发出完整工具调用/回执。
     async for mode, data in agent.astream(
         {"messages": [{"role": "user", "content": message}]},
         config=config,
         stream_mode=["messages", "updates"],
     ):
+        if mode == "messages":
+            chunk, metadata = data
+            if (
+                isinstance(chunk, (AIMessage, AIMessageChunk))
+                and metadata.get("langgraph_node") == "model"
+                and chunk.id
+                and chunk.id not in old_ids
+                and not chunk.tool_calls
+                and not getattr(chunk, "tool_call_chunks", [])
+                and not chunk.invalid_tool_calls
+                and chunk.text
+            ):
+                await emit("assistant_delta", {"message_id": chunk.id, "text": chunk.text})
+            continue
         if mode != "updates":
             continue
         for update in data.values():
@@ -47,6 +68,37 @@ async def stream_agent(
                     continue
                 indexed[item.id] = item
                 current.append(item)
+                if isinstance(item, AIMessage):
+                    if item.invalid_tool_calls:
+                        raise ValueError("invalid tool call")
+                    for call in item.tool_calls:
+                        call_id = call.get("id")
+                        if not call_id or call_id in calls:
+                            raise ValueError("duplicate tool call id")
+                        calls[call_id] = call
+                        await emit(
+                            "tool_start",
+                            {
+                                "tool_call_id": call_id,
+                                "name": call["name"],
+                                "args": call["args"],
+                            },
+                        )
+                else:
+                    call = calls.get(item.tool_call_id)
+                    if call is None or item.tool_call_id in completed:
+                        raise ValueError("unmatched or repeated tool result")
+                    completed.add(item.tool_call_id)
+                    result = item.content if isinstance(item.content, str) else str(item.content)
+                    await emit(
+                        "tool_end",
+                        {
+                            "tool_call_id": item.tool_call_id,
+                            "name": call["name"],
+                            "result": result,
+                            "ok": item.status != "error" and not result.startswith("ERROR["),
+                        },
+                    )
     # 3. 以最终已保存状态复核本轮最后消息，不能把历史 AIMessage 当成新答案。
     state = await agent.aget_state(config)
     saved = state.values.get("messages", [])
