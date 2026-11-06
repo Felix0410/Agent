@@ -1,7 +1,7 @@
 # 总体业务与系统架构（正式方案）
 
-**版本**：v1.4 · 2026-11-06  
-**状态**：V1 总体架构确定；P01–P03 实际代码已在各自开发分支实现，P02/P03 仍待用户手动验收；P04 Todo/Sub-Agent 已完成详细设计，**P04 业务代码尚未开发**。实际进度与接口以 [DEVELOPMENT.md](DEVELOPMENT.md) 和 `docs/progress/` 为准。  
+**版本**：v1.5 · 2026-11-06  
+**状态**：V1 总体架构确定；P01–P04 已在各自开发分支实现，P02/P03/P04 仍待用户手动验收；P05 ToolRegistry/MCP/Skills 已完成逐文件设计，**P05 业务代码尚未开发**。实际进度以 [DEVELOPMENT.md](DEVELOPMENT.md) 和 `docs/progress/` 为准。  
 **参考基线**：[DeerFlow 2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，commit `7e7f0410797693cf882594555ba414e0361d4c6f`。本项目自行实现，不 Fork 原项目。
 
 ## 1. 目标与边界
@@ -132,6 +132,14 @@ P04 保持单个 `create_agent` 主 Agent 和 P02 `RunService`，增加 `write_t
 `task` 由服务端可信 `AgentRunContext` 决定 Run/Thread 权限，Dispatcher 仅允许 `general/research` 两种固定子代理。每 child 独立模型消息列表、无父 Checkpointer/子任务再次委派，工具权限仅为角色白名单与父权限的交集；子代理默认只读文件，由 Lead 决定是否生成最终 Artifact。最多 3 个并发子代理、每父 Run 4 次委派，child35秒/父Run150秒限额。子任务 SQL 生命周期与 EventBus SSE 绑定父 Run，不能把子模型文本假装服务端状态。
 
 P04 不提供联网搜索、MCP、取消 API、子任务跨重启自动恢复或分布式队列。两个只读 GET 接口用于历史 Todo/Task 恢复；React `TodoPanel`、`TaskPanel` 同步真实执行过程。具体接口/逐文件任务见 [DEVELOPMENT.md P04](DEVELOPMENT.md) 和 [Codex P04-A/B/C/D](tasks/P04-ABCD.md)。
+
+### 3.5 P05 ToolRegistry / MCP / Skills 执行边界（设计态）
+
+P05 在现有 P04 Lead `create_agent` 工具列表与 LangChain ToolNode 之间增加**注册表与官方 `awrap_tool_call` Middleware**：将内置、批准的 MCP、Skill 元工具统一注册，构造当前可信 Run 的可用工具快照，二次检查权限与超时。Middleware 保留 `ToolMessage` 与修改 State 的 `Command`，尤其不能破坏 P04 的 `write_todos`；不另造 Agent 循环。P01 独立单轮计算不自动新增 MCP/Skills；P04 child 的现有只读工具白名单保持。
+
+MCP 最初仅连接用户明确启用的、在单机回环地址运行、无副作用的 Streamable HTTP Server，工具名字/参数 Schema/说明经白名单和 SHA256 指纹双重批准；**默认完全禁用**。示例 Server 只提供确定性 `lookup_fact` 以验证真实工具协议，不能据此宣称已经具备外网 Deep Research。连接失败不影响 builtin；MCP 服务器本身必须可信，客户端不能单靠 readOnlyHint 强制它只读。
+
+Skills 初期是版本管理的 `backend/skills/public/<name>/SKILL.md`：安全解析 YAML、发现简介、按需用 `list_skills/read_skill` 读取单篇正文；内容只作为模型的工具结果，不能提升权限或装载任意本地程序。React 只增加只读 CapabilityPanel 和 `GET /api/tools`、`GET /api/skills`，在原有 RunStatus 中观察实际 ToolCall/ToolTrace。具体见 [P05 正式合同](DEVELOPMENT.md) 和 [P05-A/B/C/D Codex 任务书](tasks/P05-ABCD.md)。
 
 ## 4. 模块职责与接口
 
