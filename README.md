@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P01–P04 已有实际代码和阶段测试记录；P02/P03/P04 仍为 PENDING_REVIEW，等待用户最终手动验收。P05 ToolRegistry/MCP/Skills 已实现并局部验证，状态 PENDING_REVIEW。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P01–P05 的实际 Python/React 代码已在开发分支实现；P02/P03/P04/P05 均为 PENDING_REVIEW，等待用户最终手动验收。P06 Run预算、上下文压缩、取消与恢复已完成详细设计，当前仅 PLAN_READY、业务代码尚未开发。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -38,10 +38,11 @@
 | [P03-A/B/C 实施任务书](docs/tasks/P03-ABC.md) | 本阶段 Workspace / ToolRuntime / Artifact 三任务的逐文件编码、局部测试与安全约束 |
 | [P04-A/B/C/D Codex 任务书](docs/tasks/P04-ABCD.md) | P04 Todo 状态、受限子代理、并发/事件与 Demo 的逐文件任务及测试 |
 | [P05-A/B/C/D Codex 任务书](docs/tasks/P05-ABCD.md) | ToolRegistry/ToolGuard、本地 MCP Server、Skills 与前端测试的精确文件/接口/验证要求 |
+| [P06-A/B/C/D Codex 任务书](docs/tasks/P06-ABCD.md) | 父子共享Run预算、真实/估算Usage、长工具输出引用、Graph历史压缩、取消与恢复逐文件实现 |
 | [代码可读性与 Codex 规则](AGENTS.md) | 中文注释、复杂逻辑编号分段、只测本次变更、同步前端 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
-**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次新增用户可见功能同步 Web 验证台。P02/P03 已交付而用户手动验收未在此确认；P04 已按 A→B→C→D 分别实施、局部测试和提交，等待用户手动验收；P05交付见下节，不进入P06。
+**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次新增用户可见功能同步 Web 验证台。P02–P05 已有代码与局部验证记录，但用户最终手动验收状态不自动改变；P06 已完成设计并在独立分支形成 A→B→C→D 实施任务书，**本期尚未编码或测试**。关键失败需停止，不自动进入 P07。
 
 ## P00 本地开发
 
@@ -347,3 +348,14 @@ uv run pytest -q tests/test_tools_demo.py tests/test_tool_registry.py tests/test
 本轮最终结果和每段SHA见 [P05进度](docs/progress/P05.md)。Fake+真实本机MCP/临时数据库验证完整文件、委派隔离、重启与故障；真实浏览器验证目录、下载及历史恢复。deepseek-flash另行实际调用MCP、Skill和文件工具创建2136-byte产物，约9.48秒；MCP下线后的真实错误与calculate=60也通过，合计7次模型调用、12,898 tokens，未获得账单金额。复杂Run的旧SSE回放出现stream_gap，页面通过GET恢复历史；未扩大事件窗口或进入P06。
 
 所有Smoke使用独立8005/5175和临时两库/Workspace、合成文档，已关闭清理，不改本地.env或用户原服务。PyCharm GUI断点、其它OS、真实模型下的子代理委派本轮未再实测（委派由真实Graph+Fake回归覆盖）；不是对任意不可信MCP服务的沙箱保证。当前PENDING_REVIEW，等待用户手动验收，不合并main、不进入P06。
+
+
+## P06 Run预算、上下文压缩与取消（设计就绪，尚未编码）
+
+[正式实施设计](docs/DEVELOPMENT.md) 与 [P06-A/B/C/D 逐文件 Codex 任务书](docs/tasks/P06-ABCD.md) 已同步到 `feat/p06-context-budget-cancel` 分支，独立 [进度](docs/progress/P06.md)。**当前仅继承 P05 完整代码，P06 功能未实现，不存在 P06 测试通过结果或取消按钮。**
+
+本阶段分四步：A 在现有 LangChain Middleware 中加入父 Agent+所有 Child 共享模型/工具次数预算与独立 Usage/Token 估算统计，Web 出现实际 UsagePanel；B 安全压缩 Graph 旧对话（保留当前目标、P04 Todo、ToolMessage配对和文件/Artifact引用），超长工具结果保留已登记file ID或真实Artifact来源；C 添加幂等的 `POST /api/runs/{run_id}/cancel`，区别“请求取消中”与真实CANCELLED，不杀死整个Worker队列；D 联合故障/Checkpoint/重启/UI 与短真实模型验证。
+
+设计默认父Run最长600秒、最多40次模型调用和30次工具调用（模型预算父子共享，Graph仍各自有节点步上限），单请求上下文估算12k触发压缩、18k硬阈值；**估算Token不是准确模型账单**。前端180次轮询与后端150秒时限会作为一组升级，不会只改单边。旧SQLite无破坏迁移，`cancel_requested_at` 持久表示“请求收到”，真正清理完成后才落CANCELLED；未知外部副作用保守 FAILED/OUTCOME_UNKNOWN，绝不自动重试。
+
+用户手动验收P02–P05状态仍然是 `PENDING_REVIEW`；P06 完成后再根据真实代码和测试记录发布新Demo步骤，不能提前宣称已可用。
