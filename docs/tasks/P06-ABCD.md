@@ -48,7 +48,7 @@
 |---|---|
 | `runtime/db.py` | **真正**检查 PRAGMA table_info 后幂等 `ALTER TABLE runs ADD COLUMN cancel_requested_at TEXT`，不能仅改旧 CREATE TABLE IF NOT EXISTS；不重建 status CHECK |
 | `runtime/models.py`、`runtime/repository.py` | RunDto 新增 `cancel_requested_at`；`request_cancel(run_id)` SQL 原子状态机，CREATED→CANCELLED、RUNNING仅置时间、终态重复返回现状；`complete_cancel` 与 `complete_run(SUCCEEDED)` CAS 保证取消先写入后不会再标 SUCCEEDED；FAILED/OUTCOME_UNKNOWN 标 Thread需恢复，Graph成功先赢则cancel不得撤销 |
-| `runtime/cancellation.py`（新） | `RunCancellationRegistry` 管理 run→Graph asyncio.Task/信号/in-flight 未确定标志；不管理 worker 生命周期；用户取消与服务 shutdown 语义区分 |
+| `runtime/cancellation.py`（新） | `RunCancellationRegistry` 管理 run→Graph asyncio.Task/信号/in-flight 未确定标志；不管理 worker 生命周期；用户取消与服务 shutdown 语义区分；`register(run_id,task)` 后立即复核 SQL cancel_requested_at，覆盖 RUNNING 已写但 Graph Task 尚未注册时请求先到的竞态 |
 | `runtime/runner.py` | worker创建/await单 Run Task；CREATED已被取消时跳过队列tombstone；RUNNING 收到显式取消先置数据库标记再只取消对应 Graph Task，await P04 child + P03文件shield + SQLite落库后才发终态；延续现有 Worker 不杀整个队列 |
 | `tools/executor.py`、`agents/middleware.py` | 下一次 Tool/Model 之前检查共享取消信号，不使取消后继续新增副作用；取消已启动的外部write且结果未知时标保守 outcome_unknown，**不自动重试** |
 | `api/runs.py` | POST `/api/runs/{run_id}/cancel`，无请求体，202表示取消请求接受、200表示已经终态，404不存在；返回实际 `run_id/status/cancel_requested_at` |
