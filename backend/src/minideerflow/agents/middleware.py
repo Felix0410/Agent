@@ -10,8 +10,9 @@ from minideerflow.runtime.budget import estimate_messages
 class UsageBudgetMiddleware(AgentMiddleware):
     """统计实际模型调用，不监听token delta，避免重复入账。"""
 
-    def __init__(self, source="parent"):
+    def __init__(self, source="parent", hard_limit=18000):
         self.source = source
+        self.hard_limit = hard_limit
 
     async def awrap_model_call(self, request, handler):
         context = request.runtime.context
@@ -21,6 +22,10 @@ class UsageBudgetMiddleware(AgentMiddleware):
         messages = list(request.messages)
         if request.system_message:
             messages.insert(0, request.system_message)
+        if estimate_messages(messages) > self.hard_limit:
+            from minideerflow.runtime.budget import BudgetError
+
+            raise BudgetError("CONTEXT_BUDGET_EXCEEDED")
         reserved = await tracker.reserve("model", estimate_messages(messages), self.source)
         usage = None
         status = "error"
@@ -51,3 +56,42 @@ class ChildToolBudgetMiddleware(AgentMiddleware):
             return result
         finally:
             await tracker.finish(reserved, status)
+
+
+class ContextCompactionMiddleware(AgentMiddleware):
+    """复用官方abefore_model+RemoveMessage的最小安全分区实现。"""
+
+    def __init__(self, manager, model_factory):
+        self.manager = manager
+        self.model_factory = model_factory
+
+    async def abefore_model(self, state, runtime):
+        from langchain_core.messages import RemoveMessage
+        from langgraph.graph.message import REMOVE_ALL_MESSAGES
+
+        context = runtime.context
+        if getattr(context, "budget_tracker", None) is None:
+            return None
+        await context.budget_tracker.check()
+        result = await self.manager.prepare(state["messages"], context, self.model_factory)
+        if result is None:
+            return None
+        messages, summary, before = result
+        tracker = context.budget_tracker
+        tracker.compactions += 1
+        await tracker.flush()
+        if tracker.event_sink:
+            await tracker.event_sink(
+                "context_compacted",
+                {
+                    "run_id": context.run_id,
+                    "old_message_count": len(state["messages"]),
+                    "new_message_count": len(messages),
+                    "estimated_before": before,
+                    "estimated_after": estimate_messages(messages),
+                },
+            )
+        return {
+            "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *messages],
+            "context_summary": summary,
+        }

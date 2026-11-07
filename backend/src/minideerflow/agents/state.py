@@ -21,3 +21,4 @@ class TodoItem(TodoInput):
 
 class P04AgentState(AgentState):
     todos: NotRequired[list[dict]]
+    context_summary: NotRequired[str]

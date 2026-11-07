@@ -111,7 +111,14 @@ export default function ChatPanel({
       (event) => {
         if (!live) return;
         const p = event.payload;
-        if (event.type === "budget_updated") setPlanRevision((old) => old + 1);
+        if (
+          [
+            "budget_updated",
+            "context_compacted",
+            "tool_output_externalized",
+          ].includes(event.type)
+        )
+          setPlanRevision((old) => old + 1);
         if (
           event.type.startsWith("subtask_") &&
           typeof p.task_id === "string"

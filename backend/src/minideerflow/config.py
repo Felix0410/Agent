@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     run_queue_size: int = Field(default=8, ge=1, le=8)
     # P04 父持久 Run 与 P01 单轮时限分离；上限与前端180秒轮询保持一致。
     run_timeout_seconds: float = Field(default=600, gt=0, le=600)
+    context_soft_limit_estimate: int = Field(default=12000, ge=64, le=12000)
+    context_hard_limit_estimate: int = Field(default=18000, ge=128, le=18000)
     run_max_model_calls: int = Field(default=40, ge=1, le=40)
     run_max_tool_calls: int = Field(default=30, ge=1, le=30)
     run_max_input_tokens_estimate: int = Field(default=120000, ge=1, le=120000)
@@ -63,6 +65,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def separate_database_files(self) -> "Settings":
         """业务库与 Graph 库必须分开，不能误认为两者有原子事务。"""
+        if self.context_soft_limit_estimate >= self.context_hard_limit_estimate:
+            raise ValueError("context soft limit must be less than hard limit")
         if self.runtime_db_path == self.checkpoint_db_path:
             raise ValueError("runtime and checkpoint databases must use separate files")
         if any(

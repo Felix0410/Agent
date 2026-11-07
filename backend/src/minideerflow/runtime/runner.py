@@ -8,8 +8,9 @@ from langchain_core.language_models import BaseChatModel
 from openai import APIError, APITimeoutError
 
 from minideerflow.agents.context import AgentRunContext
+from minideerflow.agents.context_manager import ContextManager
 from minideerflow.agents.lead import build_lead_agent
-from minideerflow.agents.middleware import UsageBudgetMiddleware
+from minideerflow.agents.middleware import ContextCompactionMiddleware, UsageBudgetMiddleware
 from minideerflow.agents.service import AgentExecutionError, validate_message
 from minideerflow.agents.state import P04AgentState
 from minideerflow.agents.subagents.dispatcher import TaskDispatcher
@@ -26,6 +27,7 @@ from minideerflow.runtime.usage import UsageRepository
 from minideerflow.tools.calculator import calculate
 from minideerflow.tools.executor import ToolGuardMiddleware
 from minideerflow.tools.file_tools import list_files, read_text, write_text
+from minideerflow.tools.output_budget import ToolOutputBudgetMiddleware
 from minideerflow.tools.registry import ToolPolicy, ToolRegistry, register_builtin_tools
 from minideerflow.workspace.models import WorkspaceContext
 from minideerflow.workspace.service import WorkspaceService
@@ -202,7 +204,18 @@ class RunService:
                     self.checkpointer,
                     context_schema=AgentRunContext if p04 else WorkspaceContext,
                     state_schema=P04AgentState if p04 else None,
-                    middleware=[UsageBudgetMiddleware(), ToolGuardMiddleware(self.tool_registry)]
+                    middleware=[
+                        ContextCompactionMiddleware(
+                            ContextManager(
+                                self.settings.context_soft_limit_estimate,
+                                self.settings.context_hard_limit_estimate,
+                            ),
+                            lambda: self.model_factory(self.settings),
+                        ),
+                        UsageBudgetMiddleware(hard_limit=self.settings.context_hard_limit_estimate),
+                        ToolOutputBudgetMiddleware(),
+                        ToolGuardMiddleware(self.tool_registry),
+                    ]
                     if p04
                     else None,
                     prompt_suffix=(

@@ -10,6 +10,7 @@ from minideerflow.agents.middleware import ChildToolBudgetMiddleware, UsageBudge
 from minideerflow.agents.service import extract_final_answer, extract_run_tool_traces
 from minideerflow.agents.subagents.models import TaskResult, TaskStatus
 from minideerflow.runtime.budget import BudgetError
+from minideerflow.tools.output_budget import ToolOutputBudgetMiddleware
 
 
 async def execute_child(
@@ -22,7 +23,11 @@ async def execute_child(
             model_factory(),
             tools,
             checkpointer=None,
-            middleware=[UsageBudgetMiddleware("child"), ChildToolBudgetMiddleware()],
+            middleware=[
+                UsageBudgetMiddleware("child"),
+                ChildToolBudgetMiddleware(),
+                ToolOutputBudgetMiddleware(),
+            ],
             context_schema=ChildContext,
             system_prompt=spec.system_prompt,
         )

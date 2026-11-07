@@ -99,6 +99,8 @@ export function subscribeRunEvents(
     "subtask_completed",
     "subtask_failed",
     "budget_updated",
+    "context_compacted",
+    "tool_output_externalized",
     "run_start",
     "assistant_delta",
     "tool_start",
