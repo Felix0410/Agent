@@ -66,6 +66,15 @@ async def get_run(run_id: str, request: Request) -> RunDto:
         raise HTTPException(404, detail={"code": exc.code, "message": exc.message}) from None
 
 
+@router.get("/api/runs/{run_id}/usage")
+async def get_usage(run_id: str, request: Request):
+    """统计从SQL恢复；没有Provider数字时为NULL，绝不虚构零费用。"""
+    try:
+        return await request.app.state.runner.usage.get(run_id)
+    except RepositoryError as exc:
+        raise HTTPException(404, detail={"code": exc.code, "message": exc.message}) from None
+
+
 @router.get("/api/runs/{run_id}/events")
 async def get_events(
     run_id: str, request: Request, last_event_id: str | None = Header(default=None)

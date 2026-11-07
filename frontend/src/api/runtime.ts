@@ -98,6 +98,7 @@ export function subscribeRunEvents(
     "subtask_started",
     "subtask_completed",
     "subtask_failed",
+    "budget_updated",
     "run_start",
     "assistant_delta",
     "tool_start",
@@ -192,3 +193,19 @@ export type TaskRecord = {
 export function getSubtasks(runId: string): Promise<TaskRecord[]> {
   return request(`/api/runs/${encodeURIComponent(runId)}/subtasks`);
 }
+
+export type RunUsage = {
+  run_id: string;
+  model_calls: number;
+  tool_calls: number;
+  provider_input_tokens: number | null;
+  provider_output_tokens: number | null;
+  usage_unknown_calls: number;
+  estimated_input_tokens: number;
+  elapsed_ms: number;
+  compaction_count: number;
+  output_externalized_count: number;
+  budget: Record<string, number>;
+};
+export const getUsage = (runId: string): Promise<RunUsage> =>
+  request(`/api/runs/${encodeURIComponent(runId)}/usage`);

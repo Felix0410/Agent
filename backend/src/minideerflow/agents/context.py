@@ -14,8 +14,13 @@ class AgentRunContext(WorkspaceContext):
     allowed_tools: tuple[str, ...] = ("calculate", "list_files", "read_text", "write_text")
     tool_policy: Any = None
     skill_service: Any = None
+    budget_tracker: Any = None
+    usage_recorder: Any = None
 
 
 @dataclass(frozen=True)
 class ChildContext(WorkspaceContext):
-    """只携带父真实身份，既无派发器也无写权限。"""
+    """只携带父真实身份与共享预算，既无派发器也无写权限。"""
+
+    budget_tracker: Any = None
+    usage_recorder: Any = None

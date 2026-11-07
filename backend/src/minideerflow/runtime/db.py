@@ -73,6 +73,20 @@ CREATE TABLE IF NOT EXISTS subtasks (
     created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_subtasks_run ON subtasks(run_id,created_at,id);
+CREATE TABLE IF NOT EXISTS run_usage (
+    run_id TEXT PRIMARY KEY REFERENCES runs(id), model_calls INTEGER NOT NULL DEFAULT 0,
+    tool_calls INTEGER NOT NULL DEFAULT 0, provider_input_tokens INTEGER, provider_output_tokens INTEGER,
+    usage_unknown_calls INTEGER NOT NULL DEFAULT 0, estimated_input_tokens INTEGER NOT NULL DEFAULT 0,
+    elapsed_ms INTEGER NOT NULL DEFAULT 0, compaction_count INTEGER NOT NULL DEFAULT 0,
+    output_externalized_count INTEGER NOT NULL DEFAULT 0, budget_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS usage_calls (
+    invocation_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id),
+    kind TEXT NOT NULL CHECK(kind IN ('model','tool')), source TEXT NOT NULL,
+    estimated_input_tokens INTEGER NOT NULL DEFAULT 0, provider_input_tokens INTEGER,
+    provider_output_tokens INTEGER, elapsed_ms INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_usage_run ON usage_calls(run_id,invocation_id);
 """
 
 

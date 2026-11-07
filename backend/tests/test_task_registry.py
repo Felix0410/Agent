@@ -121,7 +121,7 @@ def test_startup_orphans_and_irreversible_terminal(tmp_path):
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("run_timeout_seconds", 151),
+        ("run_timeout_seconds", 601),
         ("subagent_timeout_seconds", 36),
         ("max_subagent_concurrency", 4),
         ("max_subagent_calls_per_run", 5),

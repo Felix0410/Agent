@@ -4,6 +4,7 @@ from langchain.tools import ToolRuntime, tool
 
 from minideerflow.agents.context import AgentRunContext
 from minideerflow.agents.subagents.dispatcher import TaskDispatcher
+from minideerflow.runtime.budget import BudgetError
 from minideerflow.runtime.plan_repository import PlanError
 
 
@@ -25,6 +26,8 @@ async def task(
         if result.error_code:
             return f"ERROR[{result.error_code}]: " + result.model_dump_json()
         return result.model_dump_json()
+    except BudgetError:
+        raise
     except Exception as exc:  # noqa: BLE001 - 模型边界只输出稳定错误码
         code = exc.code if isinstance(exc, PlanError) else "SUBTASK_UNAVAILABLE"
         return f"ERROR[{code}]: Delegation failed"

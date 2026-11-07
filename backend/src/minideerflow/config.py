@@ -33,7 +33,10 @@ class Settings(BaseSettings):
     run_max_concurrency: int = Field(default=2, ge=1, le=2)
     run_queue_size: int = Field(default=8, ge=1, le=8)
     # P04 父持久 Run 与 P01 单轮时限分离；上限与前端180秒轮询保持一致。
-    run_timeout_seconds: float = Field(default=150, gt=0, le=150)
+    run_timeout_seconds: float = Field(default=600, gt=0, le=600)
+    run_max_model_calls: int = Field(default=40, ge=1, le=40)
+    run_max_tool_calls: int = Field(default=30, ge=1, le=30)
+    run_max_input_tokens_estimate: int = Field(default=120000, ge=1, le=120000)
     subagent_timeout_seconds: float = Field(default=35, gt=0, le=35)
     subagent_recursion_limit: int = Field(default=14, ge=2, le=14)
     max_subagent_concurrency: int = Field(default=3, ge=1, le=3)

@@ -9,6 +9,7 @@ from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
 from minideerflow.agents.context import AgentRunContext
+from minideerflow.runtime.budget import BudgetError
 from minideerflow.tools.registry import ToolPolicy, ToolPolicyError, ToolRegistry
 from minideerflow.workspace.service import WorkspaceService
 
@@ -20,6 +21,20 @@ class ToolGuardMiddleware(AgentMiddleware):
         self.registry = registry
 
     async def awrap_tool_call(self, request, handler):
+        """预算计数包裹原守卫，参数/权限失败也保留真实尝试次数。"""
+        tracker = getattr(request.runtime.context, "budget_tracker", None)
+        if tracker is None:
+            return await self._guard(request, handler)
+        reservation = await tracker.reserve("tool")
+        status = "error"
+        try:
+            result = await self._guard(request, handler)
+            status = "ok" if getattr(result, "status", None) != "error" else "error"
+            return result
+        finally:
+            await tracker.finish(reservation, status)
+
+    async def _guard(self, request, handler):
         """权限/参数校验→单次有界执行→脱敏错误；取消必须传播。"""
         call = request.tool_call
         call_id = call.get("id", "")
@@ -88,6 +103,8 @@ class ToolGuardMiddleware(AgentMiddleware):
                 )
                 result = result.model_copy(update={"content": text, "artifact": None})
             return result
+        except BudgetError:
+            raise
         except asyncio.CancelledError:
             raise
         except TimeoutError:

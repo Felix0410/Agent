@@ -6,8 +6,10 @@ from langchain.agents import create_agent
 from openai import APIError, APITimeoutError
 
 from minideerflow.agents.context import ChildContext
+from minideerflow.agents.middleware import ChildToolBudgetMiddleware, UsageBudgetMiddleware
 from minideerflow.agents.service import extract_final_answer, extract_run_tool_traces
 from minideerflow.agents.subagents.models import TaskResult, TaskStatus
+from minideerflow.runtime.budget import BudgetError
 
 
 async def execute_child(
@@ -20,6 +22,7 @@ async def execute_child(
             model_factory(),
             tools,
             checkpointer=None,
+            middleware=[UsageBudgetMiddleware("child"), ChildToolBudgetMiddleware()],
             context_schema=ChildContext,
             system_prompt=spec.system_prompt,
         )
@@ -54,6 +57,8 @@ async def execute_child(
             truncated=len(answer) > 1600,
             source_file_ids=sources,
         )
+    except BudgetError:
+        raise
     except asyncio.CancelledError:
         raise
     except (TimeoutError, APITimeoutError):

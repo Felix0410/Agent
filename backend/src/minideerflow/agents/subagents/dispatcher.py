@@ -84,7 +84,13 @@ class TaskDispatcher:
                     for t in (calculate, list_files, read_text)
                     if t.name in spec.allowed_tools and t.name in context.allowed_tools
                 ]
-                child = ChildContext(context.thread_id, context.run_id, context.workspace_service)
+                child = ChildContext(
+                    context.thread_id,
+                    context.run_id,
+                    context.workspace_service,
+                    budget_tracker=context.budget_tracker,
+                    usage_recorder=context.usage_recorder,
+                )
                 result = await execute_child(
                     spec, description, child, self.model_factory, tools, record.id
                 )

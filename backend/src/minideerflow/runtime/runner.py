@@ -9,17 +9,20 @@ from openai import APIError, APITimeoutError
 
 from minideerflow.agents.context import AgentRunContext
 from minideerflow.agents.lead import build_lead_agent
+from minideerflow.agents.middleware import UsageBudgetMiddleware
 from minideerflow.agents.service import AgentExecutionError, validate_message
 from minideerflow.agents.state import P04AgentState
 from minideerflow.agents.subagents.dispatcher import TaskDispatcher
 from minideerflow.config import Settings
 from minideerflow.core.model import ModelNotConfigured, build_chat_model
+from minideerflow.runtime.budget import BudgetError, RunBudget, RunBudgetTracker
 from minideerflow.runtime.events import EventBus
 from minideerflow.runtime.models import RunAccepted, RunDto, RunStatus
 from minideerflow.runtime.plan_service import PlanService
 from minideerflow.runtime.repository import RuntimeRepository
 from minideerflow.runtime.streaming import stream_agent
 from minideerflow.runtime.task_registry import TaskRegistry
+from minideerflow.runtime.usage import UsageRepository
 from minideerflow.tools.calculator import calculate
 from minideerflow.tools.executor import ToolGuardMiddleware
 from minideerflow.tools.file_tools import list_files, read_text, write_text
@@ -62,6 +65,7 @@ class RunService:
             tool_registry = ToolRegistry()
             register_builtin_tools(tool_registry)
             tool_registry.freeze()
+        self.usage = UsageRepository(repository.database)
         self.skill_service = skill_service
         self.tool_registry = tool_registry
         self.plans = plans
@@ -145,6 +149,18 @@ class RunService:
             # 1. RUNNING 先提交，模型构造失败不代表已经修改 Graph。
             await self.repository.transition_run(run.id, RunStatus.CREATED, RunStatus.RUNNING)
             await self._emit(run.id, "run_start", {"status": "RUNNING"})
+            tracker = RunBudgetTracker(
+                run.id,
+                RunBudget(
+                    self.settings.run_max_model_calls,
+                    self.settings.run_max_tool_calls,
+                    self.settings.run_timeout_seconds,
+                    self.settings.run_max_input_tokens_estimate,
+                ),
+                self.usage,
+                lambda k, p: self._emit(run.id, k, p),
+            )
+            await tracker.initialize()
             model = self.model_factory(self.settings)
             context = None
             if self.workspace is not None:
@@ -177,6 +193,8 @@ class RunService:
                         allowed_tools=tuple(t.name for t in tools),
                         tool_policy=policy,
                         skill_service=self.skill_service,
+                        budget_tracker=tracker,
+                        usage_recorder=self.usage,
                     )
                 agent = build_lead_agent(
                     model,
@@ -184,7 +202,9 @@ class RunService:
                     self.checkpointer,
                     context_schema=AgentRunContext if p04 else WorkspaceContext,
                     state_schema=P04AgentState if p04 else None,
-                    middleware=[ToolGuardMiddleware(self.tool_registry)] if p04 else None,
+                    middleware=[UsageBudgetMiddleware(), ToolGuardMiddleware(self.tool_registry)]
+                    if p04
+                    else None,
                     prompt_suffix=(
                         " For complex tasks use write_todos and keep the complete plan updated. Use task to delegate focused goals to general/research (existing material only, no internet). Child agents cannot write files; use write_text yourself for a final artifact. Report failures honestly. Simple questions need no plan or delegation."
                         if p04
@@ -218,6 +238,7 @@ class RunService:
                     )
             finally:
                 await self.task_registry.close_run(run.id)
+                await tracker.flush()
             # 3. 只有有效的本轮最终消息才能写入 SUCCEEDED。
             await self._emit(run.id, "assistant_final", {"answer": response.answer})
             await self.repository.complete_run(
@@ -229,6 +250,8 @@ class RunService:
             await self._emit(run.id, "run_end", {"status": "SUCCEEDED"})
             if self.events is not None:
                 await self.events.close_run(run.id)
+        except BudgetError as exc:
+            await self._fail_run(run.id, exc.code, graph_started)
         except asyncio.CancelledError:
             await self._fail_run(run.id, "RUN_INTERRUPTED", graph_started)
             raise

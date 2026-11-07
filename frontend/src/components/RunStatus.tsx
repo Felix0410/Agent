@@ -1,3 +1,4 @@
+import UsagePanel from "./UsagePanel";
 import TaskPanel from "./TaskPanel";
 import TodoPanel from "./TodoPanel";
 import type { TaskRecord, TodoItem } from "../api/runtime";
@@ -31,6 +32,11 @@ export default function RunStatus({
         {run.input_message}
       </p>
       <p>状态：{run.status}</p>
+      <UsagePanel
+        runId={run.id}
+        status={run.status}
+        revision={live ? planRevision : 0}
+      />
       <TaskPanel
         runId={run.id}
         status={run.status}
