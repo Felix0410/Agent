@@ -11,6 +11,7 @@ class UsageCall(BaseModel):
     invocation_id: str
     kind: str
     source: str
+    usage_source: str = "unknown"
     estimated_input_tokens: int = 0
     provider_input_tokens: int | None = None
     provider_output_tokens: int | None = None
@@ -19,6 +20,7 @@ class UsageCall(BaseModel):
 
 
 class RunUsage(BaseModel):
+    recorded: bool = False
     run_id: str
     model_calls: int = 0
     tool_calls: int = 0
@@ -72,12 +74,13 @@ class UsageRepository:
         """仅第一次最终回执入账，不在stream chunk再次计费。"""
         async with self.database.transaction() as conn:
             cur = await conn.execute(
-                "UPDATE usage_calls SET status=?,elapsed_ms=?,provider_input_tokens=?,provider_output_tokens=? WHERE invocation_id=? AND run_id=? AND status='PENDING'",
+                "UPDATE usage_calls SET status=?,elapsed_ms=?,provider_input_tokens=?,provider_output_tokens=?,usage_source=? WHERE invocation_id=? AND run_id=? AND status='PENDING'",
                 (
                     call.status,
                     call.elapsed_ms,
                     call.provider_input_tokens,
                     call.provider_output_tokens,
+                    call.usage_source,
                     call.invocation_id,
                     run_id,
                 ),
@@ -102,6 +105,7 @@ class UsageRepository:
             )
 
     async def get(self, run_id):
+        """读取同Run权威累计，未开始时Provider数字仍为NULL。"""
         async with self.database.transaction() as conn:
             await _run(conn, run_id)
             async with conn.execute("SELECT * FROM run_usage WHERE run_id=?", (run_id,)) as cur:
@@ -109,5 +113,6 @@ class UsageRepository:
             if row is None:
                 return RunUsage(run_id=run_id)
             data = dict(row)
+            data["recorded"] = True
             data["budget"] = json.loads(data.pop("budget_json"))
             return RunUsage(**data)

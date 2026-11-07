@@ -33,7 +33,10 @@ export default function UsagePanel({
     <section aria-label="运行用量">
       <h4>运行用量</h4>
       {error && <p role="alert">{error}</p>}
-      {usage && (
+      {usage?.recorded === false && (
+        <p>此Run未开始或没有P06用量记录；Provider统计未知。</p>
+      )}
+      {usage && usage.recorded !== false && (
         <>
           <p>
             模型调用：{usage.model_calls} /{" "}
@@ -41,17 +44,19 @@ export default function UsagePanel({
             / {usage.budget.max_tool_calls ?? "—"}
           </p>
           <p>
-            Provider输入/输出：
+            Provider已报告输入/输出：
             {usage.provider_input_tokens === null
               ? "未提供统计"
               : `${usage.provider_input_tokens} / ${usage.provider_output_tokens}`}
           </p>
           <p>
             未返回Provider统计的调用：{usage.usage_unknown_calls}
-            ；累计输入估算：{usage.estimated_input_tokens}（估算，非实际计费）
+            ；累计输入估算：{usage.estimated_input_tokens} /{" "}
+            {usage.budget.max_input_tokens_estimate ?? "—"}（估算，非实际计费）
           </p>
           <p>
-            已记录耗时：{(usage.elapsed_ms / 1000).toFixed(2)}秒；上下文压缩：
+            已记录耗时：{(usage.elapsed_ms / 1000).toFixed(2)} /{" "}
+            {usage.budget.max_seconds ?? "—"}秒；上下文压缩：
             {usage.compaction_count}；长结果引用：
             {usage.output_externalized_count}
           </p>

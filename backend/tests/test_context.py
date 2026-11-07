@@ -114,3 +114,80 @@ def test_hard_limit_does_not_send_unbounded_summary(tmp_path):
             assert model.seen == []
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("answer", ["", "x" * 2049])
+def test_invalid_summary_fails_before_parent_and_keeps_checkpoint(tmp_path, answer):
+    async def scenario():
+        async with workspace(tmp_path) as (ws, repo, _):
+            thread = await repo.create_thread()
+            run = await active_run(repo, thread)
+            tracker = RunBudgetTracker(run.id, RunBudget(), UsageRepository(repo.database))
+            await tracker.initialize()
+            ctx = AgentRunContext(thread.id, run.id, ws, None, budget_tracker=tracker)
+            messages = []
+            for n in range(8):
+                messages.extend(
+                    [
+                        HumanMessage(content="old " + "x" * 300),
+                        AIMessage(content="answer " + "y" * 300),
+                    ]
+                )
+            messages.append(HumanMessage(content="CURRENT_GOAL"))
+            parent = ScriptedModel(responses=[AIMessage(content="must not execute")])
+            summary = ScriptedModel(responses=[AIMessage(content=answer)])
+            async with open_checkpointer(tmp_path / "saver") as saver:
+                graph = build_lead_agent(
+                    parent,
+                    [],
+                    saver,
+                    context_schema=AgentRunContext,
+                    state_schema=P04AgentState,
+                    middleware=[
+                        ContextCompactionMiddleware(ContextManager(2000, 18000), lambda: summary)
+                    ],
+                )
+                with pytest.raises(BudgetError):
+                    await graph.ainvoke(
+                        {"messages": messages}, config=thread_config(thread.id), context=ctx
+                    )
+                state = (await graph.aget_state(thread_config(thread.id))).values
+                assert len(state["messages"]) == len(messages) and parent.seen == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("uppercase", [False, True])
+def test_summary_ids_only_from_actual_current_thread_files(tmp_path, uppercase):
+    async def scenario():
+        from test_workspace import Upload
+
+        async with workspace(tmp_path) as (ws, repo, _):
+            thread = await repo.create_thread()
+            other = await repo.create_thread()
+            run = await active_run(repo, thread)
+            own = await ws.upload(thread.id, Upload(b"own", "own.md"))
+            foreign = await ws.upload(other.id, Upload(b"foreign", "foreign.md"))
+            tracker = RunBudgetTracker(run.id, RunBudget(), UsageRepository(repo.database))
+            await tracker.initialize()
+            ctx = AgentRunContext(thread.id, run.id, ws, None, budget_tracker=tracker)
+            messages = [
+                HumanMessage(content=f"known {own.id}, untrusted mention {foreign.id}"),
+                AIMessage(content="complete"),
+            ]
+            for _ in range(8):
+                messages.extend([HumanMessage(content="x" * 300), AIMessage(content="y" * 300)])
+            messages.append(HumanMessage(content="CURRENT_GOAL"))
+            summary = ScriptedModel(
+                responses=[
+                    AIMessage(
+                        content=f"Known {own.id}; invented claim {foreign.id.upper() if uppercase else foreign.id}"
+                    )
+                ]
+            )
+            compacted, body, _ = await ContextManager(1000, 18000).prepare(
+                messages, ctx, lambda: summary
+            )
+            assert own.id in str(compacted) and foreign.id not in body and "[unverified-id]" in body
+
+    asyncio.run(scenario())

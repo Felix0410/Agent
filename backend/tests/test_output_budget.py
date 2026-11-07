@@ -3,6 +3,7 @@
 import asyncio
 import json
 
+import pytest
 from langchain_core.messages import AIMessage
 from test_file_tools import active_run
 from test_lead import ScriptedModel
@@ -108,5 +109,71 @@ def test_other_long_output_registers_downloadable_artifact(tmp_path):
             payload = json.loads(trace.result)
             data, _ = await ws.download_artifact(thread.id, payload["artifact_id"])
             assert data == ("evidence" * 3000).encode() and trace.ok and len(trace.result) < 2000
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("child", [True, False])
+def test_long_output_cannot_bypass_child_permission_or_quota(tmp_path, monkeypatch, child):
+    async def scenario():
+        from langchain.tools import tool
+
+        from minideerflow.agents.context import ChildContext
+        from minideerflow.workspace.models import WorkspaceError
+
+        @tool
+        async def long_result() -> str:
+            """Return synthetic output."""
+            return "x" * 20000
+
+        async with workspace(tmp_path) as (ws, repo, _):
+            thread = await repo.create_thread()
+            run = await active_run(repo, thread)
+            if child:
+                ctx = ChildContext(thread.id, run.id, ws)
+            else:
+
+                async def quota(*args, **kwargs):
+                    raise WorkspaceError("FILE_QUOTA_EXCEEDED", "Quota reached", 422)
+
+                monkeypatch.setattr(ws, "write_text", quota)
+                ctx = AgentRunContext(
+                    thread.id,
+                    run.id,
+                    ws,
+                    None,
+                    tool_policy=ToolPolicy(
+                        run.id,
+                        thread.id,
+                        frozenset({"long_result", "write_text"}),
+                        frozenset({"read", "write"}),
+                    ),
+                )
+            model = ScriptedModel(
+                responses=[
+                    AIMessage(
+                        content="", tool_calls=[{"id": "long", "name": "long_result", "args": {}}]
+                    ),
+                    AIMessage(content="failed"),
+                ]
+            )
+            graph = build_lead_agent(
+                model,
+                [long_result],
+                context_schema=type(ctx),
+                middleware=[ToolOutputBudgetMiddleware()],
+            )
+            result = await graph.ainvoke(
+                {"messages": [{"role": "user", "content": "test"}]}, context=ctx
+            )
+            from minideerflow.agents.service import extract_run_tool_traces
+
+            trace = extract_run_tool_traces(result["messages"])[0]
+            assert (
+                not trace.ok
+                and trace.result.startswith("ERROR[TOOL_OUTPUT_TOO_LARGE]")
+                and len(trace.result) < 200
+            )
+            assert await ws.list_files(thread.id) == []
 
     asyncio.run(scenario())

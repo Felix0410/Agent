@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS run_usage (
 CREATE TABLE IF NOT EXISTS usage_calls (
     invocation_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id),
     kind TEXT NOT NULL CHECK(kind IN ('model','tool')), source TEXT NOT NULL,
+    usage_source TEXT NOT NULL DEFAULT 'unknown',
     estimated_input_tokens INTEGER NOT NULL DEFAULT 0, provider_input_tokens INTEGER,
     provider_output_tokens INTEGER, elapsed_ms INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL
 );
@@ -122,6 +123,7 @@ class RuntimeDatabase:
         async with self._lock:
             try:
                 await self.connection.executescript("BEGIN IMMEDIATE;\n" + SCHEMA + "\nCOMMIT;")
+                await self.connection.execute("BEGIN IMMEDIATE")
                 # 旧库CREATE IF NOT EXISTS不会增列，必须实际检查后幂等迁移。
                 async with self.connection.execute("PRAGMA table_info(runs)") as cursor:
                     columns = {row["name"] for row in await cursor.fetchall()}
@@ -129,6 +131,14 @@ class RuntimeDatabase:
                     await self.connection.execute(
                         "ALTER TABLE runs ADD COLUMN cancel_requested_at TEXT"
                     )
+                # P06分项提交产生的旧usage表也可原地补齐统计来源。
+                async with self.connection.execute("PRAGMA table_info(usage_calls)") as cursor:
+                    usage_columns = {row["name"] for row in await cursor.fetchall()}
+                if "usage_source" not in usage_columns:
+                    await self.connection.execute(
+                        "ALTER TABLE usage_calls ADD COLUMN usage_source TEXT NOT NULL DEFAULT 'unknown'"
+                    )
+                await self.connection.commit()
             except BaseException:
                 await self.connection.rollback()
                 raise

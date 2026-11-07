@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     workspace_root_path: Path = Path(__file__).resolve().parents[2] / "data/workspaces"
     run_max_concurrency: int = Field(default=2, ge=1, le=2)
     run_queue_size: int = Field(default=8, ge=1, le=8)
-    # P04 父持久 Run 与 P01 单轮时限分离；上限与前端180秒轮询保持一致。
+    # P06 持久Run最长600秒，与前端720秒轮询配套；P01单轮仍为45秒。
     run_timeout_seconds: float = Field(default=600, gt=0, le=600)
     context_soft_limit_estimate: int = Field(default=12000, ge=64, le=12000)
     context_hard_limit_estimate: int = Field(default=18000, ge=128, le=18000)

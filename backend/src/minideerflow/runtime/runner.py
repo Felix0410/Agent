@@ -10,7 +10,11 @@ from openai import APIError, APITimeoutError
 from minideerflow.agents.context import AgentRunContext
 from minideerflow.agents.context_manager import ContextManager
 from minideerflow.agents.lead import build_lead_agent
-from minideerflow.agents.middleware import ContextCompactionMiddleware, UsageBudgetMiddleware
+from minideerflow.agents.middleware import (
+    ChildToolBudgetMiddleware,
+    ContextCompactionMiddleware,
+    UsageBudgetMiddleware,
+)
 from minideerflow.agents.service import AgentExecutionError, validate_message
 from minideerflow.agents.state import P04AgentState
 from minideerflow.agents.subagents.dispatcher import TaskDispatcher
@@ -30,7 +34,6 @@ from minideerflow.tools.executor import ToolGuardMiddleware
 from minideerflow.tools.file_tools import list_files, read_text, write_text
 from minideerflow.tools.output_budget import ToolOutputBudgetMiddleware
 from minideerflow.tools.registry import ToolPolicy, ToolRegistry, register_builtin_tools
-from minideerflow.workspace.models import WorkspaceContext
 from minideerflow.workspace.service import WorkspaceService
 
 logger = logging.getLogger("minideerflow")
@@ -177,6 +180,7 @@ class RunService:
                 self.usage,
                 lambda k, p: self._emit(run.id, k, p),
             )
+            tracker.context_hard_limit = self.settings.context_hard_limit_estimate
             await tracker.initialize()
             await self.cancellation.register(run.id, asyncio.current_task(), tracker)
             await tracker.check()
@@ -184,7 +188,14 @@ class RunService:
             context = None
             if self.workspace is not None:
                 # 身份来自已持久化的Run，不从Prompt/模型JSON/全局变量取得。
-                context = WorkspaceContext(run.thread_id, run.id, self.workspace)
+                context = AgentRunContext(
+                    run.thread_id,
+                    run.id,
+                    self.workspace,
+                    None,
+                    budget_tracker=tracker,
+                    usage_recorder=self.usage,
+                )
                 tools = [calculate, list_files, read_text, write_text]
                 p04 = self.plans is not None
                 if p04:
@@ -219,13 +230,14 @@ class RunService:
                     model,
                     tools,
                     self.checkpointer,
-                    context_schema=AgentRunContext if p04 else WorkspaceContext,
+                    context_schema=AgentRunContext,
                     state_schema=P04AgentState if p04 else None,
                     middleware=[
                         ContextCompactionMiddleware(
                             ContextManager(
                                 self.settings.context_soft_limit_estimate,
                                 self.settings.context_hard_limit_estimate,
+                                tools=tools,
                             ),
                             lambda: self.model_factory(self.settings),
                         ),
@@ -234,7 +246,7 @@ class RunService:
                         ToolGuardMiddleware(self.tool_registry),
                     ]
                     if p04
-                    else None,
+                    else [UsageBudgetMiddleware(), ChildToolBudgetMiddleware("parent")],
                     prompt_suffix=(
                         " For complex tasks use write_todos and keep the complete plan updated. Use task to delegate focused goals to general/research (existing material only, no internet). Child agents cannot write files; use write_text yourself for a final artifact. Report failures honestly. Simple questions need no plan or delegation."
                         if p04
@@ -248,7 +260,21 @@ class RunService:
                 )
             else:
                 # 旧单轮路径及无Workspace的局部Fake注入保持原工具范围。
-                agent = build_lead_agent(model, [calculate], self.checkpointer)
+                context = AgentRunContext(
+                    run.thread_id,
+                    run.id,
+                    None,
+                    None,
+                    budget_tracker=tracker,
+                    usage_recorder=self.usage,
+                )
+                agent = build_lead_agent(
+                    model,
+                    [calculate],
+                    self.checkpointer,
+                    context_schema=AgentRunContext,
+                    middleware=[UsageBudgetMiddleware(), ChildToolBudgetMiddleware("parent")],
+                )
             # 2. 整轮而非单次模型 HTTP 请求有时限；历史由 Checkpointer 自动传入。
             try:
                 async with asyncio.timeout(
@@ -313,17 +339,22 @@ class RunService:
         """申请和实际结束分离；HTTP响应不会等待所有外部操作完成。"""
         run, changed = await self.repository.request_cancel(run_id)
         if changed:
-            await self._emit(
-                run_id,
-                "run_cancel_requested",
-                {"status": run.status.value, "cancel_requested_at": run.cancel_requested_at},
-            )
+            # SQL已经接收请求；观察通道失败不能阻止真正取消。
+            try:
+                await self._emit(
+                    run_id,
+                    "run_cancel_requested",
+                    {"status": run.status.value, "cancel_requested_at": run.cancel_requested_at},
+                )
+            except Exception:  # noqa: BLE001 - 取消结果由数据库决定，事件仅供观察
+                logger.warning("Cancel notification unavailable (run_id=%s)", run_id)
+            finally:
+                if run.status == RunStatus.RUNNING:
+                    self.cancellation.signal(run_id)
             if run.status == RunStatus.CANCELLED:
                 await self._emit(run_id, "run_end", {"status": "CANCELLED"})
                 if self.events:
                     await self.events.close_run(run_id)
-            else:
-                self.cancellation.signal(run_id)
         return run, changed
 
     async def _finish_cancel(self, run_id, graph_started, tracker):
@@ -376,7 +407,8 @@ class RunService:
             pass
         # 2. Graph 取消处理先落库，然后才能由 lifespan 关闭 Saver 与业务连接。
         for worker in self._workers:
-            worker.cancel()
+            if not worker.cancelling():
+                worker.cancel()
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
         # 3. 尚未进入 Graph 的排队任务标记中断，但不污染正常 Thread 的恢复标志。

@@ -21,7 +21,7 @@ class PlanError(Exception):
 async def active_run(conn, run_id: str, thread_id: str):
     """事务内确认真实 Run 的 Thread 和运行状态。"""
     run = await _run(conn, run_id)
-    if run.thread_id != thread_id or run.status != "RUNNING":
+    if run.thread_id != thread_id or run.status != "RUNNING" or run.cancel_requested_at is not None:
         raise PlanError("CONTEXT_INVALID")
     return run
 

@@ -199,6 +199,7 @@ export function getSubtasks(runId: string): Promise<TaskRecord[]> {
 }
 
 export type RunUsage = {
+  recorded?: boolean;
   run_id: string;
   model_calls: number;
   tool_calls: number;
@@ -214,9 +215,7 @@ export type RunUsage = {
 export const getUsage = (runId: string): Promise<RunUsage> =>
   request(`/api/runs/${encodeURIComponent(runId)}/usage`);
 
-export async function cancelRun(
-  runId: string,
-): Promise<{
+export async function cancelRun(runId: string): Promise<{
   run_id: string;
   status: RunDto["status"];
   cancel_requested_at: string | null;

@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P01–P05 的实际 Python/React 代码已在开发分支实现；P02/P03/P04/P05 均为 PENDING_REVIEW，等待用户最终手动验收。P06 Run预算、上下文压缩、取消与恢复已完成详细设计，当前仅 PLAN_READY、业务代码尚未开发。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P01–P05 的实际 Python/React 代码已在开发分支实现；P02/P03/P04/P05 均为 PENDING_REVIEW，等待用户最终手动验收。P06 Run预算、上下文压缩、取消与恢复已实现并局部验证，状态 PENDING_REVIEW。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -42,7 +42,7 @@
 | [代码可读性与 Codex 规则](AGENTS.md) | 中文注释、复杂逻辑编号分段、只测本次变更、同步前端 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
-**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次新增用户可见功能同步 Web 验证台。P02–P05 已有代码与局部验证记录，但用户最终手动验收状态不自动改变；P06 已完成设计并在独立分支形成 A→B→C→D 实施任务书，**本期尚未编码或测试**。关键失败需停止，不自动进入 P07。
+**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次新增用户可见功能同步 Web 验证台。P02–P05 已有代码与局部验证记录，但用户最终手动验收状态不自动改变；P06 已按 A→B→C→D 实现并局部验证，等待用户手动验收。关键失败需停止，不自动进入 P07。
 
 ## P00 本地开发
 
@@ -168,7 +168,7 @@ curl -N http://127.0.0.1:8000/api/runs/RUN_ID/events
 curl -i http://127.0.0.1:8000/api/runs/RUN_ID
 ```
 
-SSE是有限内存窗口：512条/Run、64条/订阅者，终态后保留10分钟。Last-Event-ID可补发同Run后续事件；窗口缺口/过慢消费者明确stream_gap，过期410。页面至多三次原生重连，并以最多180次状态查询兜底；切换会话清理旧订阅，断线不取消后台Run。重启后事件窗口消失，但最终Run与Graph历史仍在。两库无跨库原子事务，不承诺Exactly-Once或永久事件回放。仅本机回环服务，无多用户鉴权。
+SSE是有限内存窗口：512条/Run、64条/订阅者，终态后保留10分钟。Last-Event-ID可补发同Run后续事件；窗口缺口/过慢消费者明确stream_gap，过期410。页面至多三次原生重连，并以最多720次状态查询兜底（P06调整，原P02为180次）；切换会话清理旧订阅，断线不取消后台Run。重启后事件窗口消失，但最终Run与Graph历史仍在。两库无跨库原子事务，不承诺Exactly-Once或永久事件回放。仅本机回环服务，无多用户鉴权。
 
 P02 本次局部验证（在 backend/）：
 
@@ -233,7 +233,7 @@ Fake/临时资源覆盖安全路径、上传配额、Context与ToolMessage、跨
 
 - Todo同时写真实LangGraph State/Checkpoint和每Run SQLite完整快照；同ID覆盖，最多8条，不允许删除旧ID或从completed回退，同一步多个write_todos全部拒绝。下一Run重置Graph.todos，历史SQL保留。
 - `general`只有calculate/list_files/read_text，`research`只有list_files/read_text（**仅已有材料，无联网**）。每child独立messages、checkpointer=None，无父完整历史，无task/write_todos/write_text；Lead可汇总后用write_text生成Artifact。
-- 每父Run最多3并发、4次委派；child默认35秒/14个图节点步，父持久Run150秒/36个图节点步。P01独立单轮仍45秒/12步。次数包含失败/超时；超时、取消与关闭先回收child，再终结父Run。次数/并发可降低，不能提高合同上限。
+- 每父Run最多3并发、4次委派；child默认35秒/14个图节点步，父持久Run600秒/36个图节点步（P06调整，原P04为150秒）。P01独立单轮仍45秒/12步。次数包含失败/超时；超时、取消与关闭先回收child，再终结父Run。次数/并发可降低，不能提高合同上限。
 - Subtask真实状态持久化：PENDING/RUNNING→COMPLETED/FAILED/TIMED_OUT/CANCELLED；未启动取消为FAILED。重启遗留任务标FAILED/SUBTASK_INTERRUPTED，不自动重放。子任务完成只认实际最终消息/成功工具回执，文件来源只认真实read_text，不相信模型自报UUID。
 - 子任务最多1600字符摘要，截断明确标记；完整子对话/Token不拼回父图。Todo/Task页面从真实SSE更新，Run结束/断流/缺口/刷新/重启GET补齐，切换会话不串记录。
 
@@ -347,15 +347,73 @@ uv run pytest -q tests/test_tools_demo.py tests/test_tool_registry.py tests/test
 
 本轮最终结果和每段SHA见 [P05进度](docs/progress/P05.md)。Fake+真实本机MCP/临时数据库验证完整文件、委派隔离、重启与故障；真实浏览器验证目录、下载及历史恢复。deepseek-flash另行实际调用MCP、Skill和文件工具创建2136-byte产物，约9.48秒；MCP下线后的真实错误与calculate=60也通过，合计7次模型调用、12,898 tokens，未获得账单金额。复杂Run的旧SSE回放出现stream_gap，页面通过GET恢复历史；未扩大事件窗口或进入P06。
 
-所有Smoke使用独立8005/5175和临时两库/Workspace、合成文档，已关闭清理，不改本地.env或用户原服务。PyCharm GUI断点、其它OS、真实模型下的子代理委派本轮未再实测（委派由真实Graph+Fake回归覆盖）；不是对任意不可信MCP服务的沙箱保证。当前PENDING_REVIEW，等待用户手动验收，不合并main、不进入P06。
+所有Smoke使用独立8005/5175和临时两库/Workspace、合成文档，已关闭清理，不改本地.env或用户原服务。PyCharm GUI断点、其它OS、真实模型下的子代理委派本轮未再实测（委派由真实Graph+Fake回归覆盖）；不是对任意不可信MCP服务的沙箱保证。以上为P05交付时的证据；P06新增行为见下节。P05仍待用户手动验收。
 
 
-## P06 Run预算、上下文压缩与取消（设计就绪，尚未编码）
+## P06 运行预算、上下文压缩与主动取消（PENDING_REVIEW）
 
-[正式实施设计](docs/DEVELOPMENT.md) 与 [P06-A/B/C/D 逐文件 Codex 任务书](docs/tasks/P06-ABCD.md) 已同步到 `feat/p06-context-budget-cancel` 分支，独立 [进度](docs/progress/P06.md)。**当前仅继承 P05 完整代码，P06 功能未实现，不存在 P06 测试通过结果或取消按钮。**
+已按 [正式合同](docs/DEVELOPMENT.md) 和 [A/B/C/D任务书](docs/tasks/P06-ABCD.md) 分项实现、验证和提交，保留P01–P05所有权限边界。所有关键逻辑使用中文注释；详细文件/测试/SHA见[P06进度](docs/progress/P06.md)。
 
-本阶段分四步：A 在现有 LangChain Middleware 中加入父 Agent+所有 Child 共享模型/工具次数预算与独立 Usage/Token 估算统计，Web 出现实际 UsagePanel；B 安全压缩 Graph 旧对话（保留当前目标、P04 Todo、ToolMessage配对和文件/Artifact引用），超长工具结果保留已登记file ID或真实Artifact来源；C 添加幂等的 `POST /api/runs/{run_id}/cancel`，区别“请求取消中”与真实CANCELLED，不杀死整个Worker队列；D 联合故障/Checkpoint/重启/UI 与短真实模型验证。
+### 自动预算和用量
 
-设计默认父Run最长600秒、最多40次模型调用和30次工具调用（模型预算父子共享，Graph仍各自有节点步上限），单请求上下文估算12k触发压缩、18k硬阈值；**估算Token不是准确模型账单**。前端180次轮询与后端150秒时限会作为一组升级，不会只改单边。旧SQLite无破坏迁移，`cancel_requested_at` 持久表示“请求收到”，真正清理完成后才落CANCELLED；未知外部副作用保守 FAILED/OUTCOME_UNKNOWN，绝不自动重试。
+每个持久Run从进入RUNNING开始：最长600秒、最多40次模型尝试和30次工具尝试、累计输入估算120000；**父、child、摘要共享额度**，失败/取消也消耗已预留次数。P01独立单轮仍45秒，child仍35秒/14图步，父图36步，Task仍3并发/4次委派。次数、时间、图步限制彼此独立。
 
-用户手动验收P02–P05状态仍然是 `PENDING_REVIEW`；P06 完成后再根据真实代码和测试记录发布新Demo步骤，不能提前宣称已可用。
+UsagePanel展示真实Provider输入/输出、缺失统计次数、输入估算、耗时与压缩/长结果引用次数。实际数字只取最终AIMessage usage_metadata，唯一invocation ID去重，不从stream chunk重复计费；缺失为NULL，估算单列，不虚构价格。旧历史没有P06记录时明确标注未采集，不能将缺失记录解释为实际0调用/0费用。usage_calls另记parent/child/summary来源和provider/estimate/unknown统计来源。
+
+### 自动压缩与长结果
+
+- 每次模型请求前检查历史：估算超过soft12000时，只摘要已完成的旧回合；超过hard18000必须先压缩或失败。估算包含UTF8消息、System及公开工具Schema，是保守确定性估计，**不是精确tokenizer或Provider窗口承诺**。
+- 最近至少6条完整交互、当前用户目标、未配对工具组合和独立Todo保留；真实登记且旧消息出现的file/artifact ID由服务器单独保护。摘要是历史数据，不是新的系统指令；单次摘要正文最多2KiB，摘要调用也计入同一预算。
+- Graph Checkpoint保存摘要后的状态，SQL各Run历史不删除。摘要空/超长/失败或仍超硬上限，返回CONTEXT_BUDGET_EXCEEDED，不能静默删除当前任务。
+- 成功纯文本ToolMessage超过12KiB时，只向模型和Run ToolTrace返回1KiB预览及文件引用。read_text优先引用原file_id，不复制文档；其它长结果由获准父Context使用既有Workspace登记唯一Artifact。Child不能借外置结果写文件；配额/登记失败返回明确错误，Command与失败回执保持。
+- **本期没有分块读取工具。** 长文档的短预览不能当作全文精读；需要更完整分析时提供更小范围材料。原文件保持登记和SHA，Artifact可下载，file-analysis Skill已明确该边界。
+
+### 主动取消与恢复
+
+点击“取消运行”只表示请求已接受，先显示“正在取消”，最终以GET实际状态为准。CREATED直接CANCELLED并跳过队列，不执行模型；RUNNING只先保存cancel_requested_at，取消对应Graph Task并等待child、文件shield和SQL收尾；worker和其它Run继续工作。重复请求幂等，成功先提交的Run不会被撤销，取消先提交的Run不能再标SUCCEEDED。
+
+进入Graph后的取消会保守标记Thread需恢复，请新建会话继续；旧会话仍可查历史/产物。未进入Graph的取消不污染恢复标志。已发起写入的结果无法确认时为FAILED/OUTCOME_UNKNOWN，需要人工检查已登记产物或外部系统，不自动重试、不宣称撤销成功。取消不能保证远端Provider停止计算或不计费，未返回用量仍为未知。
+
+服务关闭或重启中断且没有用户取消请求时，仍按RUN_INTERRUPTED/不确定结果失败，不伪报CANCELLED。原SQLite通过PRAGMA检查和ALTER幂等增列，既有status CHECK与历史行不重建、不删除。Graph与业务库仍没有跨库事务，不能精确恢复或自动重放半完成任务。SSE断线只断订阅，不触发取消；前端最多720次轮询。
+
+新增接口：
+
+```text
+GET  /api/runs/{run_id}/usage
+POST /api/runs/{run_id}/cancel   # 无请求体；202接受请求，200已有终态，404未知Run
+```
+
+### 启动和手动测试
+
+```bash
+# backend目录
+uv sync --locked --group dev
+uv run python src/minideerflow/main.py
+# frontend目录（另一终端）
+npm ci
+npm run dev
+```
+
+PyCharm解释器仍为backend/.venv/bin/python，入口backend/src/minideerflow/main.py，工作目录backend，无参数。更新代码后重启后端，根目录.env自动加载；**本地已有同名配置会覆盖默认值**，例如旧RUN_TIMEOUT_SECONDS=150会继续生效，本轮未修改你的.env。新默认值示例见.env.example。
+
+1. 新建会话，普通问答/计算后查看UsagePanel，刷新后数字应恢复；未提供Provider统计时应显示未知，不能显示假费用。
+2. 上传一份20–64KiB UTF8文本，要求实际read_text：应看到预览及真实file_id，长结果引用次数增加；不能声称已精读全文。要求生成简短说明时，实际Artifact可下载。
+3. 在正常长会话中观察压缩次数自动增加；短会话为0正常，不需强行消耗真实Token。开发验证使用临时soft8000/hard18000及八轮Fake历史触发真实摘要，未修改正常默认配置。
+4. 提交较慢任务后点取消，观察正在取消→真实终态；刷新仍可查询。另一会话应能继续工作。需恢复/OUTCOME_UNKNOWN时先检查历史和产物，再用新会话继续。
+
+### 本轮验证
+
+```bash
+# backend目录
+uv lock --check
+uv sync --locked --group dev
+uv run ruff check src tests examples
+uv run ruff format --check src tests examples
+uv run pytest -q tests/test_budget.py tests/test_usage.py tests/test_budget_demo.py tests/test_context.py tests/test_output_budget.py tests/test_cancel_recovery.py tests/test_runner.py tests/test_repository.py tests/test_runs_api.py tests/test_task_registry.py tests/test_tasks_api.py tests/test_events.py tests/test_todos.py tests/test_subagents.py tests/test_tool_guard.py tests/test_planning_demo.py tests/test_tools_demo.py tests/test_mcp.py tests/test_skills.py tests/test_file_tools.py tests/test_files_api.py tests/test_workspace.py tests/test_config.py tests/test_checkpoint.py tests/test_demo_api.py tests/test_health.py tests/test_calculator.py tests/test_capabilities_api.py tests/test_tool_registry.py
+```
+
+最终 **331 passed，0 failed**，仅P06及直接受影响P01–P05。uv锁检查、Ruff、TypeScript/Vite构建通过，无新依赖。覆盖连续九轮历史/长文件/Checkpoint/用量重开、取消与成功CAS、两个并行Run及child隔离、旧库历史保留、未知写入产物保留、真实本机MCP派发中取消、通知故障仍能取消、Skill不提权。
+
+真实deepseek-flash在临时阈值下完成4次摘要+3次文件工具，Provider输入9081/输出2663，估算45724，约22.56秒；Checkpoint剩9条消息且当前目标保留，1256-byte产物浏览器/HTTP/SHA一致。取消后新会话成功，已完成9次模型调用合计Provider报告12808 tokens；另有一次取消调用未返回用量，保持未知，不能当作免费。
+
+所有Smoke使用独立8006/5176、临时两库/Workspace和合成文件，已关闭清理，未动用户.env和原服务。浏览器验证Usage、预览、取消中/终态、刷新/会话切换与下载；PyCharm GUI、其它OS、真实模型下再次委派child本轮未直接验证，child/MCP故障和恢复由Fake+真实Graph/SDK覆盖。P06为PENDING_REVIEW，等待用户手动Demo；不合并main、不进入P07。

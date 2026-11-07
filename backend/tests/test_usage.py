@@ -32,3 +32,29 @@ def test_provider_null_estimate_and_unique_final(tmp_path):
             assert result.estimated_input_tokens == 60 and result.usage_unknown_calls == 1
 
     asyncio.run(scenario())
+
+
+def test_missing_history_is_not_reported_as_recorded_zero(tmp_path):
+    async def scenario():
+        async with workspace(tmp_path) as (_, repo, _):
+            thread = await repo.create_thread()
+            run = await active_run(repo, thread)
+            usage = UsageRepository(repo.database)
+            absent = await usage.get(run.id)
+            assert absent.recorded is False and absent.provider_input_tokens is None
+            tracker = RunBudgetTracker(run.id, RunBudget(), usage)
+            await tracker.initialize()
+            first = await tracker.reserve("model", 40)
+            await tracker.finish(first, "ok", {"input_tokens": 1, "output_tokens": 2})
+            second = await tracker.reserve("model", 20)
+            await tracker.finish(second, "cancelled")
+            async with (
+                repo.database.transaction() as conn,
+                conn.execute(
+                    "SELECT usage_source FROM usage_calls ORDER BY estimated_input_tokens DESC"
+                ) as cur,
+            ):
+                assert [r["usage_source"] for r in await cur.fetchall()] == ["provider", "estimate"]
+            assert (await usage.get(run.id)).recorded is True
+
+    asyncio.run(scenario())

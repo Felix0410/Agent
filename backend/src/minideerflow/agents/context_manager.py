@@ -4,13 +4,14 @@ import re
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from minideerflow.runtime.budget import BudgetError, estimate_messages
+from minideerflow.runtime.budget import BudgetError, estimate_messages, estimate_tools
 
 
 class ContextManager:
     """保留最近至少六条及最新用户目标，未配对回合绝不删除。"""
 
-    def __init__(self, soft=12000, hard=18000):
+    def __init__(self, soft=12000, hard=18000, tools=()):
+        self.tool_estimate = estimate_tools(tools)
         self.soft = soft
         self.hard = hard
 
@@ -62,7 +63,6 @@ class ContextManager:
         try:
             response = await model_factory().ainvoke([prompt])
             usage = response.usage_metadata
-            status = "ok"
             text = response.text.strip()
             if not text or len(text.encode("utf-8")) > 2048 or response.tool_calls:
                 raise BudgetError("CONTEXT_BUDGET_EXCEEDED")
@@ -75,9 +75,11 @@ class ContextManager:
             }
             text = re.sub(
                 r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
-                lambda match: match[0] if match[0] in valid else "[unverified-id]",
+                lambda match: match[0].lower() if match[0].lower() in valid else "[unverified-id]",
                 text,
+                flags=re.IGNORECASE,
             )
+            status = "ok"
             return text, sorted(valid)
         except BudgetError:
             raise
@@ -88,7 +90,7 @@ class ContextManager:
 
     async def prepare(self, messages, context, model_factory):
         """1. 阈值检查；2. 完整回合摘要；3. 硬上限复核后才返回替换。"""
-        before = estimate_messages(messages)
+        before = estimate_messages(messages) + self.tool_estimate
         if before <= self.soft:
             return None
         old, keep = self.partition(messages)
@@ -104,6 +106,6 @@ class ContextManager:
             + ", ".join(refs)
         )
         compacted = [anchor, *keep]
-        if estimate_messages(compacted) > self.hard:
+        if estimate_messages(compacted) + self.tool_estimate > self.hard:
             raise BudgetError("CONTEXT_BUDGET_EXCEEDED")
         return compacted, summary, before

@@ -38,6 +38,23 @@ def estimate_messages(messages):
     )
 
 
+def estimate_tools(tools):
+    """公开工具Schema也属于实际模型输入，不能漏出上下文预算之外。"""
+    total = 0
+    for tool in tools:
+        if isinstance(tool, dict):
+            schema = tool
+        else:
+            public = tool.tool_call_schema
+            schema = {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": public if isinstance(public, dict) else public.model_json_schema(),
+            }
+        total += len(json.dumps(schema, ensure_ascii=False, default=str).encode("utf-8")) + 64
+    return total
+
+
 class RunBudgetTracker:
     """锁覆盖父/子/摘要预留；取消和耗尽为不可逆信号。"""
 
@@ -57,6 +74,7 @@ class RunBudgetTracker:
         self.exceeded = False
         self.outcome_unknown = False
         self.cancel_check = None
+        self.context_hard_limit = 18000
 
     async def initialize(self):
         await self.repository.start(self.run_id, asdict(self.budget))
@@ -73,6 +91,7 @@ class RunBudgetTracker:
 
     async def reserve(self, kind, estimate=0, source="parent"):
         """1. 共享锁核验；2. 原子预扣；3. 保存唯一调用尝试。"""
+        # 1. 父子共享同一锁，检查取消/时限后才允许扣除次数。
         async with self.lock:
             await self.check()
             if (
@@ -84,6 +103,7 @@ class RunBudgetTracker:
             ) or (kind == "tool" and self.tool_calls >= self.budget.max_tool_calls):
                 self.exceeded = True
                 raise BudgetError()
+            # 2. 预扣同时覆盖次数与累计输入；失败也不会返还。
             if kind == "model":
                 self.model_calls += 1
                 self.estimated += estimate
@@ -95,6 +115,7 @@ class RunBudgetTracker:
                 source=source,
                 estimated_input_tokens=estimate,
             )
+            # 3. 唯一ID持久化完成后才返回给真正执行者。
             await self.repository.begin(self.run_id, call)
             return call, time.monotonic()
 
@@ -121,6 +142,13 @@ class RunBudgetTracker:
         ):
             call.provider_input_tokens = usage["input_tokens"]
             call.provider_output_tokens = usage["output_tokens"]
+        call.usage_source = (
+            "provider"
+            if call.provider_input_tokens is not None
+            else "estimate"
+            if call.estimated_input_tokens > 0
+            else "unknown"
+        )
         await self.repository.finish(self.run_id, call)
         await self.flush()
 
@@ -132,13 +160,13 @@ class RunBudgetTracker:
             self.compactions,
             self.externalized,
         )
+        await self.emit("budget_updated", (await self.repository.get(self.run_id)).model_dump())
+
+    async def emit(self, kind, payload):
+        """观察事件失败不撤销真实业务提交，也不阻止取消。"""
         if self.event_sink:
             from types import SimpleNamespace
 
             from minideerflow.runtime.plan_service import safe_emit
 
-            await safe_emit(
-                SimpleNamespace(event_sink=self.event_sink),
-                "budget_updated",
-                (await self.repository.get(self.run_id)).model_dump(),
-            )
+            await safe_emit(SimpleNamespace(event_sink=self.event_sink), kind, payload)

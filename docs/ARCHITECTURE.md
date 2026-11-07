@@ -1,7 +1,7 @@
 # 总体业务与系统架构（正式方案）
 
 **版本**：v1.6 · 2026-11-06
-**状态**：V1 总体架构确定；P01–P05 已有真实实现，P02–P05 仍待用户手动验收；P06 预算/上下文压缩/取消与恢复已完成逐文件方案，**P06 业务代码尚未开发（PLAN_READY）**。实际进度以 [DEVELOPMENT.md](DEVELOPMENT.md) 和 `docs/progress/` 为准。
+**状态**：V1 总体架构确定；P01–P05 已有真实实现，P02–P05 仍待用户手动验收；P06 预算/上下文压缩/取消与恢复已实现并局部验证，**P06为PENDING_REVIEW**。实际进度以 [DEVELOPMENT.md](DEVELOPMENT.md) 和 `docs/progress/` 为准。
 **参考基线**：[DeerFlow 2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，commit `7e7f0410797693cf882594555ba414e0361d4c6f`。本项目自行实现，不 Fork 原项目。
 
 ## 1. 目标与边界
@@ -129,7 +129,7 @@ P03 在现有 `backend/src/minideerflow/` 包下新增 `workspace/{models,storag
 
 P04 保持单个 `create_agent` 主 Agent 和 P02 `RunService`，增加 `write_todos` 与 `task` 两个模型工具，按复杂任务需要使用，不强制简单聊天规划。Todo 由 LangGraph 自定义 `AgentState.todos` + `Command` 更新，同时保存当前 Run 的 SQL 快照供刷新/重启展示；不靠自然语言推断“任务完成”。
 
-`task` 由服务端可信 `AgentRunContext` 决定 Run/Thread 权限，Dispatcher 仅允许 `general/research` 两种固定子代理。每 child 独立模型消息列表、无父 Checkpointer/子任务再次委派，工具权限仅为角色白名单与父权限的交集；子代理默认只读文件，由 Lead 决定是否生成最终 Artifact。最多 3 个并发子代理、每父 Run 4 次委派，child35秒/父Run150秒限额。子任务 SQL 生命周期与 EventBus SSE 绑定父 Run，不能把子模型文本假装服务端状态。
+`task` 由服务端可信 `AgentRunContext` 决定 Run/Thread 权限，Dispatcher 仅允许 `general/research` 两种固定子代理。每 child 独立模型消息列表、无父 Checkpointer/子任务再次委派，工具权限仅为角色白名单与父权限的交集；子代理默认只读文件，由 Lead 决定是否生成最终 Artifact。最多 3 个并发子代理、每父 Run 4 次委派，child35秒/父Run600秒限额（P06调整）。子任务 SQL 生命周期与 EventBus SSE 绑定父 Run，不能把子模型文本假装服务端状态。
 
 P04 不提供联网搜索、MCP、取消 API、子任务跨重启自动恢复或分布式队列。两个只读 GET 接口用于历史 Todo/Task 恢复；React `TodoPanel`、`TaskPanel` 同步真实执行过程。具体接口/逐文件任务见 [DEVELOPMENT.md P04](DEVELOPMENT.md) 和 [Codex P04-A/B/C/D](tasks/P04-ABCD.md)。
 
@@ -141,7 +141,7 @@ MCP 最初仅连接用户明确启用的、在单机回环地址运行、无副�
 
 Skills 初期是版本管理的 `backend/skills/public/<name>/SKILL.md`：安全解析 YAML、发现简介、按需用 `list_skills/read_skill` 读取单篇正文；内容只作为模型的工具结果，不能提升权限或装载任意本地程序。React 只增加只读 CapabilityPanel 和 `GET /api/tools`、`GET /api/skills`，在原有 RunStatus 中观察实际 ToolCall/ToolTrace。已锁定mcp1.30.0/adapters0.3.2/PyYAML6.0.3；MCP断连只收回授权，不影响内置工具，恢复需重启。Fake、真实模型、浏览器与测试结果见[阶段进度](progress/P05.md)。具体见 [P05 正式合同](DEVELOPMENT.md) 和 [P05-A/B/C/D Codex 任务书](tasks/P05-ABCD.md)。
 
-### 3.6 P06 上下文预算、Usage 与取消协议（设计态）
+### 3.6 P06 上下文预算、Usage 与取消协议（已实现，待审核）
 
 P06 不替换 P05 `ToolGuardMiddleware` 或 P04 `create_agent`，而是通过官方 `AgentMiddleware` 在模型/ToolCall 周围添加共享 RunBudgetTracker（父+子Agent+摘要模型）、SQLite Usage 数据记录和旧消息安全压缩。**模型提供方的真实 token 用量**与基于字符/字节的估算必须分列存储和展示，不计算未经提供方确认的实际账单。旧消息摘要不会修改 P02 业务历史记录，只在 LangGraph Checkpoint 中更新受控的消息列表，保留当前目标、Todo、完整 ToolCall/ToolMessage 配对与真实 File/Artifact 引用。
 

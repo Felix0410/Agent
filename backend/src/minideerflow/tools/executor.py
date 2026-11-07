@@ -141,6 +141,15 @@ class ToolGuardMiddleware(AgentMiddleware):
         except ToolPolicyError as exc:
             code = exc.code
         except Exception:  # noqa: BLE001 - Provider/文件路径/认证异常不能输出给模型
+            tracker = getattr(request.runtime.context, "budget_tracker", None)
+            if (
+                tracker
+                and execution_started
+                and not execution_confirmed
+                and definition
+                and definition.permission == "write"
+            ):
+                tracker.outcome_unknown = True
             code = "TOOL_EXECUTION_FAILED"
             if definition is not None and definition.source == "mcp":
                 code = "MCP_UNAVAILABLE"
