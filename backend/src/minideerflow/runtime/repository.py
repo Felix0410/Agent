@@ -192,10 +192,16 @@ class RuntimeRepository:
                 (RunStatus.CREATED, RunStatus.FAILED),
                 (RunStatus.RUNNING, RunStatus.SUCCEEDED),
                 (RunStatus.RUNNING, RunStatus.FAILED),
+                (RunStatus.CREATED, RunStatus.CANCELLED),
+                (RunStatus.RUNNING, RunStatus.CANCELLED),
             }
             if current.status not in expected or (current.status, target) not in allowed:
                 raise RepositoryError("INVALID_RUN_TRANSITION", "Run transition rejected")
-            terminal = target in (RunStatus.SUCCEEDED, RunStatus.FAILED)
+            if target == RunStatus.SUCCEEDED and current.cancel_requested_at is not None:
+                raise RepositoryError("RUN_CANCEL_REQUESTED", "Cancellation already requested")
+            if target == RunStatus.CANCELLED and current.cancel_requested_at is None:
+                raise RepositoryError("INVALID_RUN_TRANSITION", "Cancellation was not requested")
+            terminal = target in (RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED)
             if target == RunStatus.SUCCEEDED and (not answer or not answer.strip()):
                 raise ValueError("successful run requires a final answer")
             if target == RunStatus.FAILED and not error_code:
@@ -219,10 +225,57 @@ class RuntimeRepository:
             # 3. 同库事务记录恢复状态；两份 SQLite 之间没有跨库原子提交保证。
             await conn.execute(
                 "UPDATE threads SET updated_at=?, needs_recovery=MAX(needs_recovery,?) WHERE id=?",
-                (now, int(needs_recovery and target == RunStatus.FAILED), current.thread_id),
+                (
+                    now,
+                    int(needs_recovery and target in (RunStatus.FAILED, RunStatus.CANCELLED)),
+                    current.thread_id,
+                ),
             )
             result = await _run(conn, run_id)
         return result
+
+    async def request_cancel(self, run_id):
+        """SQL先赢：CREATED直接终结，RUNNING只置请求时间，终态不可撤销。"""
+        async with self.database.transaction() as conn:
+            current = await _run(conn, run_id)
+            if (
+                current.status not in (RunStatus.CREATED, RunStatus.RUNNING)
+                or current.cancel_requested_at
+            ):
+                return current, False
+            now = utc_now_iso()
+            if current.status == RunStatus.CREATED:
+                await conn.execute(
+                    "UPDATE runs SET status='CANCELLED',cancel_requested_at=?,finished_at=? WHERE id=? AND status='CREATED'",
+                    (now, now, run_id),
+                )
+            else:
+                await conn.execute(
+                    "UPDATE runs SET cancel_requested_at=? WHERE id=? AND status='RUNNING' AND cancel_requested_at IS NULL",
+                    (now, run_id),
+                )
+            return await _run(conn, run_id), True
+
+    async def complete_cancel(self, run_id, needs_recovery=False):
+        """清理结束后才能提交CANCELLED，调用幂等且不覆盖自然终态。"""
+        current = await self.get_run(run_id)
+        if current.status not in (RunStatus.CREATED, RunStatus.RUNNING):
+            return current
+        try:
+            return await self._update_run(
+                run_id,
+                {RunStatus.CREATED, RunStatus.RUNNING},
+                RunStatus.CANCELLED,
+                None,
+                None,
+                None,
+                needs_recovery,
+            )
+        except RepositoryError:
+            current = await self.get_run(run_id)
+            if current.status not in (RunStatus.CREATED, RunStatus.RUNNING):
+                return current
+            raise
 
     async def reconcile_orphans(self) -> int:
         """保守标记遗留活动 Run 与所属会话；不声称能无损续跑 Graph。"""

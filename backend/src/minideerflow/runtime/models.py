@@ -38,6 +38,7 @@ class RunDto(BaseModel):
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
+    cancel_requested_at: str | None = None
 
 
 class RunEvent(BaseModel):

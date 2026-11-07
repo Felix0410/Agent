@@ -20,10 +20,14 @@ export default function RunStatus({
   run,
   live,
   planRevision = 0,
+  cancelPending = false,
+  onCancel,
 }: {
   run: RunDto;
   live?: LiveRun;
   planRevision?: number;
+  cancelPending?: boolean;
+  onCancel?: () => Promise<void>;
 }) {
   return (
     <article>
@@ -31,7 +35,28 @@ export default function RunStatus({
         <strong>你：</strong>
         {run.input_message}
       </p>
-      <p>状态：{run.status}</p>
+      <p>
+        状态：{run.status}
+        {run.status === "RUNNING" && run.cancel_requested_at
+          ? "（正在取消）"
+          : ""}
+      </p>
+      {onCancel &&
+        !["SUCCEEDED", "FAILED", "CANCELLED"].includes(run.status) && (
+          <button
+            disabled={cancelPending || !!run.cancel_requested_at}
+            onClick={() => void onCancel()}
+          >
+            {cancelPending || run.cancel_requested_at
+              ? "正在取消…"
+              : "取消运行"}
+          </button>
+        )}
+      {run.error_code === "OUTCOME_UNKNOWN" && (
+        <p role="alert">
+          部分已启动操作结果未知，请检查已登记产物或外部系统；不会自动重试。
+        </p>
+      )}
       <UsagePanel
         runId={run.id}
         status={run.status}

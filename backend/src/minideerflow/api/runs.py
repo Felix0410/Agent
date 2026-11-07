@@ -3,7 +3,7 @@
 import asyncio
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 from minideerflow.agents.service import AgentExecutionError
@@ -62,6 +62,28 @@ async def start_run(thread_id: str, body: AgentRequest, request: Request) -> Run
 async def get_run(run_id: str, request: Request) -> RunDto:
     try:
         return await request.app.state.repository.get_run(run_id)
+    except RepositoryError as exc:
+        raise HTTPException(404, detail={"code": exc.code, "message": exc.message}) from None
+
+
+@router.post("/api/runs/{run_id}/cancel")
+async def cancel_run(run_id: str, request: Request):
+    """202只确认请求已接受；终态必须重新GET，重复取消幂等。"""
+    if await request.body():
+        raise HTTPException(
+            422, detail={"code": "INVALID_CANCEL_REQUEST", "message": "No request body expected"}
+        )
+    try:
+        run, changed = await request.app.state.runner.cancel(run_id)
+        status = 202 if changed or run.status in ("CREATED", "RUNNING") else 200
+        return JSONResponse(
+            status_code=status,
+            content={
+                "run_id": run.id,
+                "status": run.status.value,
+                "cancel_requested_at": run.cancel_requested_at,
+            },
+        )
     except RepositoryError as exc:
         raise HTTPException(404, detail={"code": exc.code, "message": exc.message}) from None
 

@@ -99,6 +99,19 @@ class RunBudgetTracker:
             return call, time.monotonic()
 
     async def finish(self, reservation, status, usage=None):
+        """即使重复取消也等待最终用量提交，随后继续传播取消。"""
+        task = asyncio.create_task(self._finish(reservation, status, usage))
+        interrupted = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                interrupted = True
+        task.result()
+        if interrupted:
+            raise asyncio.CancelledError
+
+    async def _finish(self, reservation, status, usage=None):
         """只有明确完整Provider数字才入真实账；异常/取消仍保留次数。"""
         call, started = reservation
         call.status = status

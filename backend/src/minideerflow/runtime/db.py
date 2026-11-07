@@ -122,6 +122,13 @@ class RuntimeDatabase:
         async with self._lock:
             try:
                 await self.connection.executescript("BEGIN IMMEDIATE;\n" + SCHEMA + "\nCOMMIT;")
+                # 旧库CREATE IF NOT EXISTS不会增列，必须实际检查后幂等迁移。
+                async with self.connection.execute("PRAGMA table_info(runs)") as cursor:
+                    columns = {row["name"] for row in await cursor.fetchall()}
+                if "cancel_requested_at" not in columns:
+                    await self.connection.execute(
+                        "ALTER TABLE runs ADD COLUMN cancel_requested_at TEXT"
+                    )
             except BaseException:
                 await self.connection.rollback()
                 raise

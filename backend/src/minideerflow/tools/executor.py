@@ -39,6 +39,8 @@ class ToolGuardMiddleware(AgentMiddleware):
         call = request.tool_call
         call_id = call.get("id", "")
         definition = None
+        execution_started = False
+        execution_confirmed = False
         try:
             # 1. 可信身份和当前Policy必须一致，不能由模型多传一个参数越权。
             name = call.get("name")
@@ -86,7 +88,12 @@ class ToolGuardMiddleware(AgentMiddleware):
             else:
                 schema.model_validate(args, strict=True)
             # 2. 官方handler负责注入runtime；只执行一次，Command原对象直接返回。
+            tracker = getattr(context, "budget_tracker", None)
+            if tracker:
+                await tracker.check()
+            execution_started = True
             result = await asyncio.wait_for(handler(request), timeout=definition.timeout_seconds)
+            execution_confirmed = True
             if definition.source == "mcp":
                 # MCP仅允许纯文本，原始错误/结构化artifact已由SDK拦截器清理。
                 if not isinstance(result, ToolMessage):
@@ -106,8 +113,26 @@ class ToolGuardMiddleware(AgentMiddleware):
         except BudgetError:
             raise
         except asyncio.CancelledError:
+            tracker = getattr(request.runtime.context, "budget_tracker", None)
+            if (
+                tracker
+                and execution_started
+                and not execution_confirmed
+                and definition
+                and definition.permission == "write"
+            ):
+                tracker.outcome_unknown = True
             raise
         except TimeoutError:
+            tracker = getattr(request.runtime.context, "budget_tracker", None)
+            if (
+                tracker
+                and execution_started
+                and not execution_confirmed
+                and definition
+                and definition.permission == "write"
+            ):
+                tracker.outcome_unknown = True
             code = "TOOL_TIMEOUT"
             if definition is not None and definition.source == "mcp":
                 self.registry.mark_origin_offline(definition.origin)

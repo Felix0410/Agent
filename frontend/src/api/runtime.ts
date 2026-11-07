@@ -25,6 +25,7 @@ export type RunDto = {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  cancel_requested_at: string | null;
 };
 
 export function createThread(title?: string): Promise<ThreadDto> {
@@ -101,6 +102,7 @@ export function subscribeRunEvents(
     "budget_updated",
     "context_compacted",
     "tool_output_externalized",
+    "run_cancel_requested",
     "run_start",
     "assistant_delta",
     "tool_start",
@@ -211,3 +213,20 @@ export type RunUsage = {
 };
 export const getUsage = (runId: string): Promise<RunUsage> =>
   request(`/api/runs/${encodeURIComponent(runId)}/usage`);
+
+export async function cancelRun(
+  runId: string,
+): Promise<{
+  run_id: string;
+  status: RunDto["status"];
+  cancel_requested_at: string | null;
+}> {
+  const response = await fetch(
+    `/api/runs/${encodeURIComponent(runId)}/cancel`,
+    { method: "POST" },
+  );
+  const data = await response.json();
+  if (!response.ok)
+    throw new Error(data.detail?.message ?? "Cancel request failed");
+  return data;
+}

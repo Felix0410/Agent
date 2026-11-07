@@ -17,10 +17,11 @@ from minideerflow.agents.subagents.dispatcher import TaskDispatcher
 from minideerflow.config import Settings
 from minideerflow.core.model import ModelNotConfigured, build_chat_model
 from minideerflow.runtime.budget import BudgetError, RunBudget, RunBudgetTracker
+from minideerflow.runtime.cancellation import RunCancellationRegistry
 from minideerflow.runtime.events import EventBus
 from minideerflow.runtime.models import RunAccepted, RunDto, RunStatus
 from minideerflow.runtime.plan_service import PlanService
-from minideerflow.runtime.repository import RuntimeRepository
+from minideerflow.runtime.repository import RepositoryError, RuntimeRepository
 from minideerflow.runtime.streaming import stream_agent
 from minideerflow.runtime.task_registry import TaskRegistry
 from minideerflow.runtime.usage import UsageRepository
@@ -68,6 +69,7 @@ class RunService:
             register_builtin_tools(tool_registry)
             tool_registry.freeze()
         self.usage = UsageRepository(repository.database)
+        self.cancellation = RunCancellationRegistry(repository)
         self.skill_service = skill_service
         self.tool_registry = tool_registry
         self.plans = plans
@@ -129,7 +131,19 @@ class RunService:
             run_id = await self.queue.get()
             try:
                 run = await self.repository.get_run(run_id)
-                await self._execute_run(run)
+                if run.status not in (RunStatus.CREATED, RunStatus.RUNNING):
+                    continue
+                execution = asyncio.create_task(self._execute_run(run), name="graph-run-" + run.id)
+                try:
+                    await asyncio.shield(execution)
+                except asyncio.CancelledError:
+                    # 用户只取消execution；worker shutdown才取消/等待自己拥有的Run。
+                    if asyncio.current_task().cancelling():
+                        if not execution.done() and not execution.cancelling():
+                            execution.cancel()
+                        await asyncio.gather(execution, return_exceptions=True)
+                        raise
+                    await asyncio.gather(execution, return_exceptions=True)
             except asyncio.CancelledError:
                 # 取消也可能发生在读取 Run、尚未进入 _execute_run 的窗口。
                 await self._fail_run(run_id, "RUN_INTERRUPTED", False)
@@ -142,6 +156,7 @@ class RunService:
     async def _execute_run(self, run: RunDto) -> None:
         """成功先验收消息再提交；失败只保存稳定错误码与保守恢复标志。"""
         graph_started = False
+        tracker = None
 
         def mark_graph_started() -> None:
             nonlocal graph_started
@@ -163,6 +178,8 @@ class RunService:
                 lambda k, p: self._emit(run.id, k, p),
             )
             await tracker.initialize()
+            await self.cancellation.register(run.id, asyncio.current_task(), tracker)
+            await tracker.check()
             model = self.model_factory(self.settings)
             context = None
             if self.workspace is not None:
@@ -252,6 +269,8 @@ class RunService:
             finally:
                 await self.task_registry.close_run(run.id)
                 await tracker.flush()
+            if tracker.outcome_unknown:
+                raise BudgetError("OUTCOME_UNKNOWN")
             # 3. 只有有效的本轮最终消息才能写入 SUCCEEDED。
             await self._emit(run.id, "assistant_final", {"answer": response.answer})
             await self.repository.complete_run(
@@ -263,21 +282,71 @@ class RunService:
             await self._emit(run.id, "run_end", {"status": "SUCCEEDED"})
             if self.events is not None:
                 await self.events.close_run(run.id)
+        except RepositoryError as exc:
+            if exc.code == "RUN_CANCEL_REQUESTED":
+                await self._finish_cancel(run.id, graph_started, tracker)
+            else:
+                await self._fail_run(run.id, "AGENT_EXECUTION_FAILED", graph_started)
         except BudgetError as exc:
             await self._fail_run(run.id, exc.code, graph_started)
         except asyncio.CancelledError:
-            await self._fail_run(run.id, "RUN_INTERRUPTED", graph_started)
-            raise
+            current = await self.repository.get_run(run.id)
+            if current.cancel_requested_at:
+                await self._finish_cancel(run.id, graph_started, tracker)
+            else:
+                await self._fail_run(
+                    run.id,
+                    "OUTCOME_UNKNOWN" if tracker and tracker.outcome_unknown else "RUN_INTERRUPTED",
+                    graph_started,
+                )
+                raise
         except (TimeoutError, APITimeoutError):
             await self._fail_run(run.id, "MODEL_TIMEOUT", graph_started)
         except APIError:
             await self._fail_run(run.id, "MODEL_UPSTREAM_ERROR", graph_started)
         except Exception:  # noqa: BLE001 - 原始异常可能含 Provider 凭据
             await self._fail_run(run.id, "AGENT_EXECUTION_FAILED", graph_started)
+        finally:
+            self.cancellation.unregister(run.id)
+
+    async def cancel(self, run_id):
+        """申请和实际结束分离；HTTP响应不会等待所有外部操作完成。"""
+        run, changed = await self.repository.request_cancel(run_id)
+        if changed:
+            await self._emit(
+                run_id,
+                "run_cancel_requested",
+                {"status": run.status.value, "cancel_requested_at": run.cancel_requested_at},
+            )
+            if run.status == RunStatus.CANCELLED:
+                await self._emit(run_id, "run_end", {"status": "CANCELLED"})
+                if self.events:
+                    await self.events.close_run(run_id)
+            else:
+                self.cancellation.signal(run_id)
+        return run, changed
+
+    async def _finish_cancel(self, run_id, graph_started, tracker):
+        """所有child/文件SQL清理完成后才发终态；未知写入不能假报已撤销。"""
+        await self.task_registry.close_run(run_id)
+        if tracker:
+            await tracker.flush()
+        if tracker and tracker.outcome_unknown:
+            await self._fail_run(run_id, "OUTCOME_UNKNOWN", True)
+            return
+        run = await self.repository.complete_cancel(run_id, graph_started)
+        if run.status == RunStatus.CANCELLED:
+            await self._emit(run_id, "run_end", {"status": "CANCELLED"})
+            if self.events:
+                await self.events.close_run(run_id)
 
     async def _fail_run(self, run_id: str, code: str, graph_started: bool) -> None:
         """不覆盖既有终态；数据库不可写时只记录安全日志，留待重启核查。"""
         try:
+            entry = self.cancellation.active.get(run_id)
+            if entry and entry[1].outcome_unknown:
+                code = "OUTCOME_UNKNOWN"
+                graph_started = True
             run = await self.repository.get_run(run_id)
             if run.status not in (RunStatus.CREATED, RunStatus.RUNNING):
                 return

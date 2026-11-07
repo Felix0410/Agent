@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   getRun,
+  cancelRun,
   isTerminal,
   listRuns,
   listThreads,
@@ -23,6 +24,7 @@ export default function ChatPanel({
 }) {
   const [planRevision, setPlanRevision] = useState(0);
   const [runs, setRuns] = useState<RunDto[]>([]);
+  const [cancelPending, setCancelPending] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -97,7 +99,7 @@ export default function ChatPanel({
         if (live && ticket === version) setError(String(reason));
       }
       if (!live || ticket !== version) return;
-      if (++attempts >= 180) {
+      if (++attempts >= 720) {
         stopStream();
         setError("状态查询已达上限，请刷新重新查询；后台任务不会被取消。");
         return;
@@ -111,6 +113,7 @@ export default function ChatPanel({
       (event) => {
         if (!live) return;
         const p = event.payload;
+        if (event.type === "run_cancel_requested") void poll();
         if (
           [
             "budget_updated",
@@ -252,6 +255,7 @@ export default function ChatPanel({
       // 3. 202 只是接收确认；后续 GET Run 才决定最终显示的状态与结果。
       const accepted = await startRun(thread.id, message);
       setMessage("");
+      setCancelPending(false);
       setActiveRun(accepted.run_id);
     } catch (reason) {
       setError(String(reason));
@@ -273,6 +277,24 @@ export default function ChatPanel({
           run={run}
           live={run.id === activeRun ? liveRun : undefined}
           planRevision={planRevision}
+          cancelPending={cancelPending}
+          onCancel={
+            run.id === activeRun
+              ? async () => {
+                  setCancelPending(true);
+                  try {
+                    await cancelRun(run.id);
+                    const fresh = await getRun(run.id);
+                    setRuns((old) =>
+                      old.map((item) => (item.id === fresh.id ? fresh : item)),
+                    );
+                  } catch (reason) {
+                    setError(String(reason));
+                    setCancelPending(false);
+                  }
+                }
+              : undefined
+          }
         />
       ))}
       {recovering && <p role="alert">此会话需恢复，请新建会话继续。</p>}

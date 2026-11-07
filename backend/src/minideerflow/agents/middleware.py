@@ -30,6 +30,7 @@ class UsageBudgetMiddleware(AgentMiddleware):
         usage = None
         status = "error"
         try:
+            await tracker.check()
             response = await handler(request)
             usage = response.result[-1].usage_metadata if response.result else None
             status = "ok"
@@ -51,6 +52,7 @@ class ChildToolBudgetMiddleware(AgentMiddleware):
         reserved = await tracker.reserve("tool", source="child")
         status = "error"
         try:
+            await tracker.check()
             result = await handler(request)
             status = "ok"
             return result

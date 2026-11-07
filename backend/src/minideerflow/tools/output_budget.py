@@ -1,5 +1,6 @@
 """工具输出外置：原ID/错误/Command保持，Child永远不借此写文件。"""
 
+import asyncio
 import json
 from uuid import uuid4
 
@@ -43,6 +44,9 @@ class ToolOutputBudgetMiddleware(AgentMiddleware):
                     or "write" not in policy.allowed_permissions
                 ):
                     raise ValueError("Not allowed")
+                tracker = getattr(context, "budget_tracker", None)
+                if tracker:
+                    await tracker.check()
                 artifact = await context.workspace_service.write_text(
                     context.thread_id,
                     context.run_id,
@@ -69,6 +73,11 @@ class ToolOutputBudgetMiddleware(AgentMiddleware):
             return result.model_copy(
                 update={"content": json.dumps(payload, ensure_ascii=False), "artifact": None}
             )
+        except asyncio.CancelledError:
+            tracker = getattr(context, "budget_tracker", None)
+            if tracker and request.tool_call["name"] != "read_text":
+                tracker.outcome_unknown = True
+            raise
         except Exception:  # noqa: BLE001 - 存储失败不能泄露原长正文/路径或伪造已保存
             return result.model_copy(
                 update={
