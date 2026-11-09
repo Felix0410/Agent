@@ -52,7 +52,7 @@ class _Entry:
 
 
 class SkillCatalog:
-    """发现只保留元数据与摘要；按需读时再次核对根/目录/inode/内容。"""
+    """Skill目录"""
 
     def __init__(self, registry, root: Path = DEFAULT_ROOT):
         self.registry = registry
@@ -199,7 +199,7 @@ class SkillCatalog:
         )
 
     def list_skills(self, policy):
-        """元数据列表不含正文；要求不满足的Skill不展示也不激活。"""
+        """返回所有Skill的元数据列表"""
         return [
             {
                 "name": e.meta.name,
@@ -212,14 +212,14 @@ class SkillCatalog:
         ]
 
     def catalog(self):
-        """HTTP默认Lead目录只读；警告仅包含安全逻辑名和状态。"""
+        """返回所有Skill的元数据列表"""
         policy = ToolPolicy(
             "", "", self.registry.names, frozenset({"read", "write", "orchestrate"})
         )
         return self.list_skills(policy) + self._warnings
 
     def load_skill(self, name, policy):
-        """按发现时的逻辑name定位，拒绝运行中替换；不会改变Policy。"""
+        """加载Skill正文"""
         entry = self._entries.get(name)
         if entry is None or not self._allowed(entry, policy):
             raise SkillError("SKILL_NOT_ALLOWED")

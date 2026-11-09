@@ -9,17 +9,20 @@ from minideerflow.workspace.service import WorkspaceService
 
 
 async def _context(runtime: ToolRuntime[WorkspaceContext]) -> WorkspaceContext:
-    """不仅隐藏身份参数，还复核当前Run与Thread实际归属。"""
+    """获取并验证工作空间上下文"""
     context = runtime.context
+    # 验证上下文类型
     if not isinstance(context, WorkspaceContext) or not isinstance(
         context.workspace_service, WorkspaceService
     ):
         raise WorkspaceError("WORKSPACE_UNAVAILABLE", "Trusted workspace context is required", 503)
+    # 验证Run与Thread归属
     await context.workspace_service.repository.check_run(context.thread_id, context.run_id)
     return context
 
 
 def _error(exc: WorkspaceError) -> str:
+    """格式化工作空间错误信息"""
     return f"ERROR[{exc.code}]: {exc.safe_message}"
 
 
@@ -44,7 +47,7 @@ async def list_files(runtime: ToolRuntime[WorkspaceContext]) -> str:
         )
     except WorkspaceError as exc:
         return _error(exc)
-    except Exception:  # noqa: BLE001 - 不向模型透传本地路径或底层异常
+    except Exception:
         return "ERROR[WORKSPACE_UNAVAILABLE]: File operation failed"
 
 
@@ -56,7 +59,7 @@ async def read_text(file_id: str, runtime: ToolRuntime[WorkspaceContext]) -> str
         return await context.workspace_service.read_text(context.thread_id, file_id)
     except WorkspaceError as exc:
         return _error(exc)
-    except Exception:  # noqa: BLE001 - 不向模型透传本地路径或底层异常
+    except Exception:
         return "ERROR[WORKSPACE_UNAVAILABLE]: File operation failed"
 
 
@@ -79,11 +82,11 @@ async def write_text(filename: str, content: str, runtime: ToolRuntime[Workspace
         )
     except WorkspaceError as exc:
         return _error(exc)
-    except Exception:  # noqa: BLE001 - 不向模型透传本地路径或底层异常
+    except Exception:  
         return "ERROR[WORKSPACE_UNAVAILABLE]: File operation failed"
 
 
-# 在自动生成的schema上拒绝额外参数，ToolRuntime仍由框架注入并从模型schema隐藏。
+# 禁用额外参数
 for scoped_tool in (list_files, read_text, write_text):
     scoped_tool.args_schema.model_config["extra"] = "forbid"
     scoped_tool.args_schema.model_rebuild(force=True)

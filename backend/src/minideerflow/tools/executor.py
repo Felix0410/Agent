@@ -15,13 +15,13 @@ from minideerflow.workspace.service import WorkspaceService
 
 
 class ToolGuardMiddleware(AgentMiddleware):
-    """保留框架ToolRuntime和Command的类型/ID/状态更新。"""
+    """工具执行安全中间件"""
 
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
 
     async def awrap_tool_call(self, request, handler):
-        """预算计数包裹原守卫，参数/权限失败也保留真实尝试次数。"""
+        """工具执行安全中间件"""
         tracker = getattr(request.runtime.context, "budget_tracker", None)
         if tracker is None:
             return await self._guard(request, handler)

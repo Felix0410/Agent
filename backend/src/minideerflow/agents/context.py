@@ -8,6 +8,7 @@ from minideerflow.workspace.models import WorkspaceContext
 
 @dataclass(frozen=True)
 class AgentRunContext(WorkspaceContext):
+    """智能运行上下文，包含工作空间上下文和智能体服务。"""
     todo_service: Any
     event_sink: Any = None
     task_dispatcher: Any = None
@@ -20,7 +21,7 @@ class AgentRunContext(WorkspaceContext):
 
 @dataclass(frozen=True)
 class ChildContext(WorkspaceContext):
-    """只携带父真实身份与共享预算，既无派发器也无写权限。"""
+    """子agent运行上下文，包含工作空间上下文和子运行服务。"""
 
     budget_tracker: Any = None
     usage_recorder: Any = None

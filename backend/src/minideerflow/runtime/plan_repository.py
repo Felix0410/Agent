@@ -11,7 +11,7 @@ from minideerflow.runtime.repository import _run
 
 
 class PlanError(Exception):
-    """模型只接收稳定错误码，绝不接收底层 SQL/路径。"""
+    """计划任务异常"""
 
     def __init__(self, code: str):
         super().__init__(code)
@@ -27,12 +27,13 @@ async def active_run(conn, run_id: str, thread_id: str):
 
 
 class PlanRepository:
-    """单库快照是历史页面权威数据；Checkpoint 负责父图当前状态。"""
+    """计划任务仓库"""
 
     def __init__(self, database: RuntimeDatabase):
         self.database = database
 
     async def list_todos(self, run_id: str) -> list[TodoItem]:
+        """获取计划任务列表"""
         async with self.database.transaction() as conn:
             await _run(conn, run_id)
             async with conn.execute(
@@ -44,7 +45,7 @@ class PlanRepository:
     async def replace_todos(
         self, run_id: str, thread_id: str, items: list[TodoInput]
     ) -> list[TodoItem]:
-        """完整列表原子替换：拒绝删 ID、重复 ID 和 completed 回退。"""
+        """替换计划任务列表"""
         if not 1 <= len(items) <= 8 or len({i.todo_id for i in items}) != len(items):
             raise PlanError("TODO_INVALID")
         async with self.database.transaction() as conn:
@@ -69,7 +70,7 @@ class PlanRepository:
             return result
 
     async def list_subtasks(self, run_id: str) -> list[TaskRecord]:
-        """历史任务由 SQL 恢复，不依赖活动 Task 对象。"""
+        """获取子任务任务列表"""
         async with self.database.transaction() as conn:
             await _run(conn, run_id)
             async with conn.execute(
@@ -79,6 +80,7 @@ class PlanRepository:
 
     @staticmethod
     def _task(row) -> TaskRecord:
+        """将数据库行转换为子任务记录"""
         data = dict(row)
         data["source_file_ids"] = json.loads(data.pop("source_file_ids_json"))
         return TaskRecord(**data)
@@ -91,7 +93,7 @@ class PlanRepository:
         description: str,
         todo_id: str | None = None,
     ) -> TaskRecord:
-        """只允许活动父 Run 创建，todo 关联必须属于同 Run。"""
+        """创建子任务"""
         if agent_type not in ("general", "research") or not 1 <= len(description.strip()) <= 1000:
             raise PlanError("SUBTASK_INVALID")
         async with self.database.transaction() as conn:
@@ -135,7 +137,7 @@ class PlanRepository:
         status: TaskStatus,
         result: TaskResult | None = None,
     ) -> TaskRecord:
-        """按固定转移更新；终态不可逆，身份条件不能由模型提供。"""
+        """按固定转移更新子任务状态"""
         async with self.database.transaction() as conn:
             async with conn.execute(
                 "SELECT * FROM subtasks WHERE id=? AND run_id=? AND thread_id=?",
@@ -181,7 +183,7 @@ class PlanRepository:
                 return self._task(await cur.fetchone())
 
     async def reconcile_orphaned_subtasks(self) -> int:
-        """进程重启只标失败，不重放可能已执行过的工作。"""
+        """处理孤儿子任务"""
         async with self.database.transaction() as conn:
             cur = await conn.execute(
                 "UPDATE subtasks SET status='FAILED',error_code='SUBTASK_INTERRUPTED',finished_at=? WHERE status IN ('PENDING','RUNNING')",

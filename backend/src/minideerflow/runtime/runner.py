@@ -48,7 +48,7 @@ class RunServiceError(Exception):
 
 
 class RunService:
-    """最多两个 worker、八个排队任务，Task 强引用保持到 shutdown 回收。"""
+    """运行服务"""
 
     def __init__(
         self,
@@ -88,9 +88,11 @@ class RunService:
         self.accepting = False
 
     def start(self) -> None:
-        """只在应用生命周期启动 worker，不在这里构造或连接模型。"""
+        """启动运行服务"""
+        # 检查服务是否已启动
         if self._workers:
             return
+        # 启动 worker
         self.accepting = True
         self._workers = [
             asyncio.create_task(self._worker_loop(), name=f"run-worker-{index}")
@@ -98,66 +100,86 @@ class RunService:
         ]
 
     async def start_run(self, thread_id: str, message: str) -> RunAccepted:
-        """统一准入临界区内检查容量并创建/入队；失败绝不返回虚假的 202。"""
+        """启动一个运行任务"""
+        # 验证消息格式
         validate_message(message)
+
+        # 1. 获取锁
         async with self._admission:
-            # 1. 会话错误优先于容量错误，模型缺配置也不能残留 CREATED。
+            # 2. 检查服务是否停止
             if not self.accepting:
                 raise RunServiceError("RUN_SERVICE_STOPPING", "Service is stopping", 503)
+            # 3. 检查会话是否已存在
             await self.repository.check_thread_available(thread_id)
+            # 4. 检查模型是否配置
             try:
                 self.model_factory(self.settings)
+            # 处理模型未配置异常
             except ModelNotConfigured:
                 raise
-            except Exception:  # noqa: BLE001 - 不向 HTTP 传递模型构造异常
+            # 处理其他异常
+            except Exception:
                 raise AgentExecutionError(
                     "MODEL_UPSTREAM_ERROR", "Model configuration failed"
                 ) from None
-            # 2. 只有此处是生产者；同一临界区内检查空间后写入并立即入队。
+            # 5. 检查队列是否已满
             if self.queue.full():
                 raise RunServiceError("RUN_QUEUE_FULL", "Run queue is full", 429)
+            # 6. 创建 Run
             run = await self.repository.create_run(thread_id, message)
+            # 7. 入队
             try:
                 if self.events is not None:
+                    # 7.1 确保run事件已注册
                     await self.events.ensure_run(run.id, thread_id)
+                # 7.2 入队
                 self.queue.put_nowait(run.id)
+            # 处理其他异常
             except BaseException:
                 await self.repository.complete_run(
                     run.id, status=RunStatus.FAILED, error_code="RUN_INTERRUPTED"
                 )
                 raise
+            # 8. 返回 RunAccepted
             return RunAccepted(run_id=run.id, thread_id=thread_id)
 
     async def _worker_loop(self) -> None:
-        """独立回收每个任务的错误；单个模型失败不能杀死整个 worker。"""
+        """运行任务执行循环"""
         while True:
+            # 1. 从队列获取任务id
             run_id = await self.queue.get()
             try:
+                # 2. 从数据库获取任务
                 run = await self.repository.get_run(run_id)
+                # 3. 检查任务状态是否为 CREATED 或 RUNNING
                 if run.status not in (RunStatus.CREATED, RunStatus.RUNNING):
                     continue
+                # 4. 执行任务
                 execution = asyncio.create_task(self._execute_run(run), name="graph-run-" + run.id)
                 try:
+                    # 4.1 等待任务执行完成
                     await asyncio.shield(execution)
+                # 处理任务取消异常
                 except asyncio.CancelledError:
-                    # 用户只取消execution；worker shutdown才取消/等待自己拥有的Run。
                     if asyncio.current_task().cancelling():
                         if not execution.done() and not execution.cancelling():
                             execution.cancel()
                         await asyncio.gather(execution, return_exceptions=True)
                         raise
                     await asyncio.gather(execution, return_exceptions=True)
+            # 处理任务取消异常
             except asyncio.CancelledError:
-                # 取消也可能发生在读取 Run、尚未进入 _execute_run 的窗口。
                 await self._fail_run(run_id, "RUN_INTERRUPTED", False)
                 raise
-            except Exception:  # noqa: BLE001 - worker 边界只记录脱敏日志
+            # 处理其他异常
+            except Exception:
                 logger.error("Run worker failed (run_id=%s)", run_id)
             finally:
+                # 5. 任务完成，从队列中移除
                 self.queue.task_done()
 
     async def _execute_run(self, run: RunDto) -> None:
-        """成功先验收消息再提交；失败只保存稳定错误码与保守恢复标志。"""
+        """执行一个运行任务"""
         graph_started = False
         tracker = None
 
@@ -166,9 +188,11 @@ class RunService:
             graph_started = True
 
         try:
-            # 1. RUNNING 先提交，模型构造失败不代表已经修改 Graph。
+            # 1. 过渡任务状态为 RUNNING
             await self.repository.transition_run(run.id, RunStatus.CREATED, RunStatus.RUNNING)
+            # 2. 发布 run_start 事件
             await self._emit(run.id, "run_start", {"status": "RUNNING"})
+            # 3. 创建运行预算跟踪器
             tracker = RunBudgetTracker(
                 run.id,
                 RunBudget(
@@ -184,10 +208,13 @@ class RunService:
             await tracker.initialize()
             await self.cancellation.register(run.id, asyncio.current_task(), tracker)
             await tracker.check()
+            # 4. 创建模型实例
             model = self.model_factory(self.settings)
+            # 5. 创建运行上下文
             context = None
+            # 6. 检查是否有工作空间
             if self.workspace is not None:
-                # 身份来自已持久化的Run，不从Prompt/模型JSON/全局变量取得。
+                # 6.1 配置运行上下文
                 context = AgentRunContext(
                     run.thread_id,
                     run.id,
@@ -196,7 +223,9 @@ class RunService:
                     budget_tracker=tracker,
                     usage_recorder=self.usage,
                 )
+                # 6.2 配置工具
                 tools = [calculate, list_files, read_text, write_text]
+                # 6.3 配置计划
                 p04 = self.plans is not None
                 if p04:
                     dispatcher = TaskDispatcher(
@@ -206,13 +235,16 @@ class RunService:
                         timeout=self.settings.subagent_timeout_seconds,
                         recursion_limit=self.settings.subagent_recursion_limit,
                     )
+                    # 配置工具策略
                     policy = ToolPolicy(
                         run.id,
                         run.thread_id,
                         self.tool_registry.names,
                         frozenset({"read", "write", "orchestrate"}),
                     )
+                    # 配置可执行工具
                     tools = self.tool_registry.list_allowed(policy)
+                    # 配置运行上下文
                     context = AgentRunContext(
                         run.thread_id,
                         run.id,
@@ -226,6 +258,7 @@ class RunService:
                         budget_tracker=tracker,
                         usage_recorder=self.usage,
                     )
+                # 6.4 配置智能体
                 agent = build_lead_agent(
                     model,
                     tools,
@@ -258,8 +291,8 @@ class RunService:
                         else ""
                     ),
                 )
+            # 6.5 如果没有工作空间，使用最小模型与工具配置
             else:
-                # 旧单轮路径及无Workspace的局部Fake注入保持原工具范围。
                 context = AgentRunContext(
                     run.thread_id,
                     run.id,
@@ -275,13 +308,15 @@ class RunService:
                     context_schema=AgentRunContext,
                     middleware=[UsageBudgetMiddleware(), ChildToolBudgetMiddleware("parent")],
                 )
-            # 2. 整轮而非单次模型 HTTP 请求有时限；历史由 Checkpointer 自动传入。
+            # 7. 执行智能体
             try:
+                # 7.1 设置超时时间
                 async with asyncio.timeout(
                     self.settings.run_timeout_seconds
                     if self.plans
                     else self.settings.model_timeout_seconds
                 ):
+                    # 7.2 执行智能体
                     response = await stream_agent(
                         agent,
                         run.thread_id,
@@ -293,11 +328,12 @@ class RunService:
                         initial_state_extra={"todos": []} if self.plans else None,
                     )
             finally:
+                # 7.3 关闭当前run下的子任务
                 await self.task_registry.close_run(run.id)
                 await tracker.flush()
             if tracker.outcome_unknown:
                 raise BudgetError("OUTCOME_UNKNOWN")
-            # 3. 只有有效的本轮最终消息才能写入 SUCCEEDED。
+            # 8. 持久化最终答案和工具调用轨迹
             await self._emit(run.id, "assistant_final", {"answer": response.answer})
             await self.repository.complete_run(
                 run.id,
@@ -305,6 +341,7 @@ class RunService:
                 answer=response.answer,
                 tool_calls=response.tool_calls,
             )
+            # 9. 发送运行结束事件
             await self._emit(run.id, "run_end", {"status": "SUCCEEDED"})
             if self.events is not None:
                 await self.events.close_run(run.id)
@@ -372,23 +409,28 @@ class RunService:
                 await self.events.close_run(run_id)
 
     async def _fail_run(self, run_id: str, code: str, graph_started: bool) -> None:
-        """不覆盖既有终态；数据库不可写时只记录安全日志，留待重启核查。"""
+        """处理运行失败异常，记录错误并发送事件。"""
         try:
+            # 1. 检查运行是否已取消
             entry = self.cancellation.active.get(run_id)
             if entry and entry[1].outcome_unknown:
                 code = "OUTCOME_UNKNOWN"
                 graph_started = True
+            # 2. 检查运行状态是否为创建或运行中
             run = await self.repository.get_run(run_id)
             if run.status not in (RunStatus.CREATED, RunStatus.RUNNING):
                 return
+            # 3. 记录错误并持久化失败状态
             await self.repository.complete_run(
                 run_id, status=RunStatus.FAILED, error_code=code, needs_recovery=graph_started
             )
+            # 4. 发送错误事件和运行结束事件
             await self._emit(run_id, "error", {"code": code, "message": "Run execution failed"})
             await self._emit(run_id, "run_end", {"status": "FAILED"})
+            # 5. 关闭事件通道
             if self.events is not None:
                 await self.events.close_run(run_id)
-        except Exception:  # noqa: BLE001 - 不能以伪造成功掩盖持久化失败
+        except Exception:
             logger.error("Run failure persistence failed (run_id=%s)", run_id)
 
     async def _emit(self, run_id: str, kind: str, payload: dict) -> None:

@@ -1,4 +1,4 @@
-"""父 Tool 内同步等待子代理；权限来自可信 Run Context。"""
+"""子任务分发器"""
 
 import asyncio
 from dataclasses import replace
@@ -15,7 +15,7 @@ from minideerflow.tools.file_tools import list_files, read_text
 
 
 class TaskDispatcher:
-    """每 Run 的限额与生命周期由同一个 TaskRegistry 管理。"""
+    """子任务分发器"""
 
     def __init__(self, repository, model_factory, registry=None, *, timeout=35, recursion_limit=14):
         self.repository = repository
@@ -27,12 +27,11 @@ class TaskDispatcher:
     async def dispatch(
         self, context, agent_type: str, description: str, todo_id: str | None = None
     ) -> TaskResult:
-        """角色与父权限取交集，子 Context 不包含 dispatcher。"""
+        """委派子任务"""
         if not isinstance(context, AgentRunContext) or context.task_dispatcher is not self:
             raise PlanError("SUBTASK_CONTEXT_INVALID")
         if agent_type not in SPECS:
             raise PlanError("SUBTASK_ROLE_INVALID")
-        # 1. 先验证真实身份和输入，再保留有界执行名额。
         if not 1 <= len(description.strip()) <= 1000:
             raise PlanError("SUBTASK_INVALID")
         await context.workspace_service.repository.check_run(context.thread_id, context.run_id)
@@ -42,7 +41,8 @@ class TaskDispatcher:
         )
 
     async def _execute(self, context, agent_type, description, todo_id, semaphore):
-        """SQL 阶段用 shield 确认提交结果，取消时不遗留 PENDING/RUNNING。"""
+        """执行子任务"""
+        # 1. 注册子任务
         registration = asyncio.create_task(
             self.repository.create_subtask(
                 context.run_id, context.thread_id, agent_type, description, todo_id
@@ -51,6 +51,7 @@ class TaskDispatcher:
         record = None
         phase = None
         try:
+            # 2. 提交注册事件
             record = await asyncio.shield(registration)
             await safe_emit(
                 context,
@@ -63,8 +64,9 @@ class TaskDispatcher:
                     "status": "PENDING",
                 },
             )
-            # 2. 第四个已登记任务在这里排队；等待被取消不能伪造已启动。
+            # 3. 在并发信号量下执行子任务
             async with semaphore:
+                # 4. 注册并提交启动事件
                 phase = asyncio.create_task(
                     self.repository.transition_subtask(
                         record.id, context.run_id, context.thread_id, TaskStatus.RUNNING
@@ -76,6 +78,7 @@ class TaskDispatcher:
                     "subtask_started",
                     {"task_id": record.id, "agent_type": agent_type, "status": "RUNNING"},
                 )
+                # 5. 执行子任务
                 spec = replace(
                     SPECS[agent_type], timeout=self.timeout, max_steps=self.recursion_limit
                 )
@@ -94,12 +97,13 @@ class TaskDispatcher:
                 result = await execute_child(
                     spec, description, child, self.model_factory, tools, record.id
                 )
-                # 3. 已提交终态遇取消仍保留；等待最终提交后才回收句柄。
+                # 6. 提交终态事件
                 phase = asyncio.create_task(self._finish(context, result))
                 await asyncio.shield(phase)
+                # 7. 返回任务结果
                 return result
+        # 8. 处理父任务取消时的异常
         except BaseException:
-            # shield 只防止半途取消；必须显式等待，不能让 SQL 写入逃逸生命周期。
             try:
                 record = record or await registration
                 if phase is not None:
@@ -123,14 +127,14 @@ class TaskDispatcher:
                     )
                     cleanup = asyncio.create_task(self._finish(context, result))
                     await asyncio.shield(cleanup)
-            except Exception:  # noqa: BLE001 - 库故障留给启动孤儿核查，不打印敏感异常
+            except Exception:
                 import logging
 
                 logging.getLogger("minideerflow").error("Subtask cleanup unavailable")
             raise
 
     async def _finish(self, context, result):
-        """持久化真实终态并发出对应父 Run 事件。"""
+        """处理子任务终态"""
         await self.repository.transition_subtask(
             result.task_id, context.run_id, context.thread_id, result.status, result
         )

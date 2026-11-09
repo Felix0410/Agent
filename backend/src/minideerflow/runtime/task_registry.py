@@ -7,7 +7,7 @@ from minideerflow.runtime.plan_repository import PlanError
 
 
 async def _drain(tasks):
-    """重复取消也先等待所有清理完成，再向调用方传播取消。"""
+    """等待所有子任务完成"""
     group = asyncio.gather(*tasks, return_exceptions=True)
     interrupted = False
     while not group.done():
@@ -22,38 +22,40 @@ async def _drain(tasks):
 
 @dataclass
 class _RunTasks:
-    semaphore: asyncio.Semaphore
-    calls: int = 0
+    """子任务状态"""
+    semaphore: asyncio.Semaphore  # 并发信号量
+    calls: int = 0  # 已调用次数
     closing: bool = False
     tasks: set[asyncio.Task] = field(default_factory=set)
 
 
 class TaskRegistry:
-    """每父 Run 最多三个执行、四次尝试；不创建离线后台任务。"""
+    """子任务注册器"""
 
     def __init__(self, concurrency: int = 3, max_calls: int = 4):
-        self.concurrency = concurrency
-        self.max_calls = max_calls
+        self.concurrency = concurrency  # 最大并发数
+        self.max_calls = max_calls  # 最大调用次数
         self._runs: dict[str, _RunTasks] = {}
         self._closing = False
 
     async def run(self, run_id: str, factory):
-        """计数预留无 await，单事件循环内不会超额；句柄保留到回收。"""
+        """执行子任务"""
         if self._closing:
             raise PlanError("SUBTASK_STOPPING")
+        # 1. 检查当前run下的子任务状态
         state = self._runs.setdefault(run_id, _RunTasks(asyncio.Semaphore(self.concurrency)))
         if state.closing:
             raise PlanError("SUBTASK_STOPPING")
         if state.calls >= self.max_calls:
             raise PlanError("SUBTASK_LIMIT")
-        # 1. 拒绝第五次前不启动模型；失败/取消也消耗本轮委派次数。
         state.calls += 1
+        # 2. 执行子任务
         work = asyncio.create_task(factory(state.semaphore), name="subagent-" + run_id)
         state.tasks.add(work)
         try:
             return await asyncio.shield(work)
+        # 3. 处理任务取消时的异常
         except asyncio.CancelledError:
-            # 2. 父取消必须等 child 的 SQL 清理结束，再继续父终态处理。
             if not work.done() and not work.cancelling():
                 work.cancel()
             await _drain([work])
@@ -62,7 +64,7 @@ class TaskRegistry:
             state.tasks.discard(work)
 
     async def close_run(self, run_id: str):
-        """停止新增并回收全部 child；调用方保证父图已停止提交工具。"""
+        """关闭当前run下的所有子任务"""
         state = self._runs.get(run_id)
         if state is None:
             return

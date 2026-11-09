@@ -24,7 +24,7 @@ TEXT_MIMES = {
 
 
 class WorkspaceError(Exception):
-    """只能向 HTTP/模型传递短消息，不能携带宿主机路径或底层异常。"""
+    """工作空间错误异常"""
 
     def __init__(self, code: str, safe_message: str, status: int) -> None:
         super().__init__(safe_message)
@@ -32,11 +32,13 @@ class WorkspaceError(Exception):
 
 
 class FileKind(str, Enum):
+    """文件类型"""
     UPLOAD = "UPLOAD"
     ARTIFACT = "ARTIFACT"
 
 
 class FileRecord(BaseModel):
+    """文件记录，包含文件元数据和存储键。"""
     id: str
     thread_id: str
     display_name: str
@@ -50,6 +52,7 @@ class FileRecord(BaseModel):
 
 
 class ArtifactRecord(BaseModel):
+    """Agent生成文件记录"""
     artifact_id: str
     file_id: str
     display_name: str
@@ -59,10 +62,10 @@ class ArtifactRecord(BaseModel):
     created_at: str
     thread_id: str = Field(exclude=True)
 
-
+# dataclass自动生成 __init__ 方法，frozen=True 表示字段不可变
 @dataclass(frozen=True)
 class WorkspaceContext:
-    """仅由 Runner 构造的服务端身份，禁止放入持久 Graph State。"""
+    """工作空间上下文"""
 
     thread_id: str
     run_id: str
@@ -70,7 +73,7 @@ class WorkspaceContext:
 
 
 def validate_uuid(value: str) -> str:
-    """只接受后端使用的规范 UUID，避免把身份字符串当路径片段。"""
+    """验证 UUID """
     try:
         if str(UUID(value)) == value:
             return value
@@ -80,7 +83,7 @@ def validate_uuid(value: str) -> str:
 
 
 def validate_filename(value: str) -> tuple[str, str]:
-    """NFC 显示名可以含中文/空格，但任何路径语义、控制字符和歧义都拒绝。"""
+    """验证文件名"""
     name = unicodedata.normalize("NFC", value)
     if (
         not 1 <= len(name) <= 120

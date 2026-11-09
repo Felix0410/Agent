@@ -24,28 +24,30 @@ from minideerflow.workspace.models import (
 
 @dataclass
 class StoredFile:
-    """登记前继续持有目录 fd，失败清理不重新解析可能被替换的路径。"""
+    """存储的文件记录，包含文件记录和目录 fd。"""
 
     record: FileRecord
     directory_fd: int
 
     def close(self) -> None:
+        """关闭目录 fd，释放资源。"""
         if self.directory_fd >= 0:
             os.close(self.directory_fd)
             self.directory_fd = -1
 
 
 class WorkspaceStorage:
-    """只信任自己打开的目录 inode；不提供按用户路径读写的方法。"""
+    """工作空间存储类，负责安全存储文件。"""
 
     def __init__(self, root: Path) -> None:
+        """初始化工作空间存储类，指定根目录。"""
         if not root.is_absolute() or ".." in root.parts:
             raise WorkspaceError("INVALID_FILE_PATH", "Workspace root must be absolute", 422)
         self.root = root
         self._root_fd = -1
 
     def open(self) -> None:
-        """逐级 no-follow 打开/创建根目录，缺少安全能力时拒绝启动。"""
+        """打开工作空间存储，确保根目录存在且安全。"""
         required = (os.open, os.mkdir, os.stat, os.link, os.unlink)
         if (
             os.name != "posix"
@@ -82,21 +84,24 @@ class WorkspaceStorage:
 
     @staticmethod
     def _directory_flags() -> int:
+        """目录打开标志"""
         return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
     @staticmethod
     def _trusted_directory(fd: int) -> None:
+        """验证目录 fd 是否安全"""
         info = os.fstat(fd)
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise WorkspaceError("INVALID_FILE_PATH", "Unsafe workspace directory", 422)
 
     def close(self) -> None:
+        """关闭工作空间存储，释放所有资源。"""
         if self._root_fd >= 0:
             os.close(self._root_fd)
             self._root_fd = -1
 
     def _assert_location(self, thread_id: str, fd: int) -> None:
-        """核对已钉住 fd 与当前目录项；替换竞争不能转向 symlink 的目标。"""
+        """验证文件流位置"""
         root = os.stat(self.root, follow_symlinks=False)
         opened = os.fstat(self._root_fd)
         named = os.stat(thread_id, dir_fd=self._root_fd, follow_symlinks=False)
@@ -111,6 +116,7 @@ class WorkspaceStorage:
         self._trusted_directory(fd)
 
     def _thread_directory(self, thread_id: str, *, create: bool) -> int:
+        """打开或创建 Thread 目录"""
         validate_uuid(thread_id)
         if create:
             try:
@@ -126,13 +132,14 @@ class WorkspaceStorage:
             raise
 
     async def save_upload_stream(self, thread_id: str, upload, name: str, mime: str) -> StoredFile:
-        """分块读取 UploadFile，不信任客户端 MIME 或 Content-Length。"""
-
+        """保存上传流"""
+        # 1. 分块读取上传流
         async def chunks() -> AsyncIterator[bytes]:
             while chunk := await upload.read(CHUNK_SIZE):
                 yield chunk
-
+        # 2. 验证文件大小
         limit = PDF_UPLOAD_LIMIT if mime == "application/pdf" else TEXT_UPLOAD_LIMIT
+        # 3. 保存文件流
         return await self._save(thread_id, name, mime, chunks(), limit)
 
     async def _save(
@@ -146,13 +153,15 @@ class WorkspaceStorage:
         kind: FileKind = FileKind.UPLOAD,
         run_id: str | None = None,
     ) -> StoredFile:
+        """保存文件流"""
+        # 1. 初始化变量，设置临时文件名防止误读取失败文件
         directory = -1
         file_fd = -1
         temporary = ".tmp-" + uuid4().hex
         key = uuid4().hex
         temporary_created = published = success = False
         try:
-            # 1. 只用内部 UUID 在固定的 Thread fd 下创建独占临时文件。
+            # 2. 打开或创建 Thread 目录
             directory = self._thread_directory(thread_id, create=True)
             file_fd = os.open(
                 temporary,
@@ -164,9 +173,11 @@ class WorkspaceStorage:
             digest, size, header = hashlib.sha256(), 0, b""
             decoder = codecs.getincrementaldecoder("utf-8")("strict")
             async for chunk in chunks:
+                # 3. 验证文件大小
                 size += len(chunk)
                 if size > limit:
                     raise WorkspaceError("FILE_TOO_LARGE", "File exceeds the permitted size", 413)
+                # 4. 验证文本文件内容
                 if mime != "application/pdf":
                     decoded = decoder.decode(chunk, final=False)
                     if any(
@@ -180,6 +191,7 @@ class WorkspaceStorage:
                 digest.update(chunk)
                 view = memoryview(chunk)
                 while view:
+                    # 5. 写入文件内容
                     written = os.write(file_fd, view)
                     if not written:
                         raise OSError("short write")
@@ -189,21 +201,22 @@ class WorkspaceStorage:
                     raise WorkspaceError("INVALID_FILE_CONTENT", "Invalid PDF signature", 422)
             else:
                 decoder.decode(b"", final=True)
-            # 2. fsync 后用 link 原子无覆盖发布；目标即使同时存在也必须失败。
+            # 6. 同步文件数据到磁盘
             os.fsync(file_fd)
             info = os.fstat(file_fd)
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != size:
                 raise WorkspaceError("INVALID_FILE_PATH", "Unsafe file object", 422)
             self._assert_location(thread_id, directory)
+            # 7. 将临时文件链接到最终文件名
             os.link(
                 temporary, key, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False
             )
             published = True
+            # 8. 删除临时文件
             os.unlink(temporary, dir_fd=directory)
             temporary_created = False
             os.fsync(directory)
             self._assert_location(thread_id, directory)
-            # 发布目标必须仍是写入fd对应的常规文件，不能链接到被替换的临时目录项。
             target = os.stat(key, dir_fd=directory, follow_symlinks=False)
             written = os.fstat(file_fd)
             if (
@@ -225,13 +238,13 @@ class WorkspaceStorage:
                 created_at=utc_now_iso(),
             )
             success = True
+            # 9. 返回已登记的文件元数据和目录描述符
             return StoredFile(record, directory)
         except UnicodeError:
             raise WorkspaceError("INVALID_FILE_CONTENT", "Text must use valid UTF-8", 422) from None
         except OSError:
             raise WorkspaceError("INVALID_FILE_PATH", "Secure file operation failed", 422) from None
         finally:
-            # 3. 取消和所有异常都清理本次新文件，不解析路径、不删除碰撞的旧目标。
             if file_fd >= 0:
                 os.close(file_fd)
             if not success and directory >= 0:
@@ -243,25 +256,26 @@ class WorkspaceStorage:
 
     @staticmethod
     def _unlink(fd: int, key: str) -> None:
+        """删除文件或目录项"""
         try:
             os.unlink(key, dir_fd=fd)
         except OSError:
-            # 已移走/删除时仅尽力清理；未登记文件永不通过 API 暴露。
             pass
 
     def discard_new(self, stored: StoredFile) -> None:
-        """仅清理本次已发布的新 UUID，不操作用户给定文件名。"""
+        """删除新文件"""
         self._unlink(stored.directory_fd, stored.record.storage_key)
         stored.close()
 
     def verify_new(self, stored: StoredFile) -> None:
+        """验证新文件位置"""
         try:
             self._assert_location(stored.record.thread_id, stored.directory_fd)
         except OSError:
             raise WorkspaceError("INVALID_FILE_PATH", "Workspace directory changed", 422) from None
 
     def read_registered(self, record: FileRecord) -> bytes:
-        """无跟随打开并复核登记大小/哈希后返回字节，禁止 FileResponse 再次开路径。"""
+        """读取已登记文件内容"""
         directory = file_fd = -1
         try:
             if UUID(record.storage_key).hex != record.storage_key:
@@ -307,7 +321,7 @@ class WorkspaceStorage:
     async def save_text(
         self, thread_id: str, run_id: str, name: str, content: str, mime: str
     ) -> StoredFile:
-        """小文本使用同一安全发布机制，大小按UTF-8字节而非字符计数。"""
+        """保存文本文件"""
         from minideerflow.workspace.models import WRITE_LIMIT
 
         try:

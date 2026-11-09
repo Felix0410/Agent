@@ -11,7 +11,7 @@ from minideerflow.runtime.models import RunDto, RunStatus, ThreadDto, utc_now_is
 
 
 class RepositoryError(Exception):
-    """只携带稳定业务错误，不向路由暴露 SQL 异常文本。"""
+    """数据库操作异常"""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -20,6 +20,7 @@ class RepositoryError(Exception):
 
 
 async def _thread(connection: aiosqlite.Connection, thread_id: str) -> ThreadDto:
+    """查询会话详情"""
     async with connection.execute("SELECT * FROM threads WHERE id=?", (thread_id,)) as cursor:
         row = await cursor.fetchone()
     if row is None:
@@ -28,6 +29,7 @@ async def _thread(connection: aiosqlite.Connection, thread_id: str) -> ThreadDto
 
 
 async def _run(connection: aiosqlite.Connection, run_id: str) -> RunDto:
+    """查询 Run 详情"""
     async with connection.execute("SELECT * FROM runs WHERE id=?", (run_id,)) as cursor:
         row = await cursor.fetchone()
     if row is None:
@@ -36,19 +38,21 @@ async def _run(connection: aiosqlite.Connection, run_id: str) -> RunDto:
 
 
 def _run_dto(row: aiosqlite.Row) -> RunDto:
+    """将数据库行转换为 Run 详情"""
     data = dict(row)
     data["tool_calls"] = json.loads(data.pop("tool_trace_json"))
     return RunDto(**data)
 
 
 class RuntimeRepository:
-    """单 Worker 内复用同一个业务连接，数据库索引作为并发约束兜底。"""
+    """运行时数据库操作"""
 
+    # 初始化数据库连接
     def __init__(self, database: RuntimeDatabase) -> None:
         self.database = database
 
     async def create_thread(self, title: str = "新会话") -> ThreadDto:
-        """创建会话身份，不创建 Graph 消息或 Run。"""
+        """创建一个新会话"""
         now = utc_now_iso()
         thread = ThreadDto(id=str(uuid4()), title=title, created_at=now, updated_at=now)
         async with self.database.transaction() as conn:
@@ -59,7 +63,7 @@ class RuntimeRepository:
         return thread
 
     async def list_threads(self) -> list[ThreadDto]:
-        """按更新时间倒序列出真实会话，相同时间以 ID 稳定排序。"""
+        """查询所有会话"""
         async with (
             self.database.transaction() as conn,
             conn.execute("SELECT * FROM threads ORDER BY updated_at DESC, id DESC") as cursor,
@@ -67,12 +71,12 @@ class RuntimeRepository:
             return [ThreadDto(**dict(row)) for row in await cursor.fetchall()]
 
     async def get_thread(self, thread_id: str) -> ThreadDto:
-        """读取会话；不存在时抛出稳定的 404 业务错误。"""
+        """读取会话详情"""
         async with self.database.transaction() as conn:
             return await _thread(conn, thread_id)
 
     async def list_runs(self, thread_id: str, limit: int = 50) -> list[RunDto]:
-        """先截取最近 N 条，再按正序返回；空历史与不存在的会话不同。"""
+        """查询会话下的最近几条 Run"""
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
         async with self.database.transaction() as conn:
@@ -84,7 +88,7 @@ class RuntimeRepository:
                 return [_run_dto(row) for row in reversed(await cursor.fetchall())]
 
     async def create_run(self, thread_id: str, message: str) -> RunDto:
-        """在同一事务内检查恢复标志、创建 Run 并更新会话时间。"""
+        """创建一个新 Run"""
         validate_message(message)
         run = RunDto(
             id=str(uuid4()),
@@ -94,30 +98,30 @@ class RuntimeRepository:
             created_at=utc_now_iso(),
         )
         async with self.database.transaction() as conn:
-            # 1. 恢复状态优先拒绝，不能给部分 Checkpoint 自动接续新消息。
+            # 检查会话是否需要恢复
             thread = await _thread(conn, thread_id)
             if thread.needs_recovery:
                 raise RepositoryError("THREAD_REQUIRES_RECOVERY", "Create a new thread to continue")
-            # 2. 部分唯一索引是最终约束；即使其它连接绕过本地锁也不能重复活动 Run。
             try:
                 await conn.execute(
                     "INSERT INTO runs(id,thread_id,input_message,status,created_at) VALUES(?,?,?,?,?)",
                     (run.id, thread_id, message, run.status.value, run.created_at),
                 )
+            # 处理唯一索引冲突
             except aiosqlite.IntegrityError as exc:
                 if "runs.thread_id" in str(exc):
                     raise RepositoryError(
                         "THREAD_BUSY", "Thread already has an active run"
                     ) from None
                 raise
-            # 3. 只有插入成功才更新会话，事务失败时两者一起回滚。
+            # 更新会话时间
             await conn.execute(
                 "UPDATE threads SET updated_at=? WHERE id=?", (run.created_at, thread_id)
             )
         return run
 
     async def check_thread_available(self, thread_id: str) -> None:
-        """准入前检查，保证恢复/忙错误优先；create_run 仍由唯一索引最终兜底。"""
+        """检查会话是否可用"""
         async with self.database.transaction() as conn:
             thread = await _thread(conn, thread_id)
             if thread.needs_recovery:
@@ -130,7 +134,7 @@ class RuntimeRepository:
                     raise RepositoryError("THREAD_BUSY", "Thread already has an active run")
 
     async def get_run(self, run_id: str) -> RunDto:
-        """读取权威 Run 状态，而非从 Graph 文本推测是否完成。"""
+        """读取 Run 详情"""
         async with self.database.transaction() as conn:
             return await _run(conn, run_id)
 
@@ -145,7 +149,7 @@ class RuntimeRepository:
         error_code: str | None = None,
         needs_recovery: bool = False,
     ) -> RunDto:
-        """执行带 expected 条件的原子状态迁移，终态字段与状态同时落库。"""
+        """更新 Run 状态"""
         return await self._update_run(
             run_id, {expected}, target, answer, tool_calls, error_code, needs_recovery
         )
@@ -160,7 +164,7 @@ class RuntimeRepository:
         error_code: str | None = None,
         needs_recovery: bool = False,
     ) -> RunDto:
-        """一次性终结活动 Run；进入 Graph 后失败时由调用方明确标记需恢复。"""
+        """终结 Run"""
         if status not in (RunStatus.SUCCEEDED, RunStatus.FAILED):
             raise RepositoryError("INVALID_RUN_TRANSITION", "Unsupported terminal status")
         return await self._update_run(
@@ -183,10 +187,11 @@ class RuntimeRepository:
         error_code: str | None,
         needs_recovery: bool,
     ) -> RunDto:
-        """所有状态写入共用的事务，防止多次终结或撤销已提交终态。"""
+        """更新 Run 状态"""
         async with self.database.transaction() as conn:
-            # 1. 在写事务里读取当前状态；仅允许规格列出的单向边。
+            # 1. 查询当前 Run 状态
             current = await _run(conn, run_id)
+            # 2. 检查状态迁移是否符合规格
             allowed = {
                 (RunStatus.CREATED, RunStatus.RUNNING),
                 (RunStatus.CREATED, RunStatus.FAILED),
@@ -207,7 +212,7 @@ class RuntimeRepository:
             if target == RunStatus.FAILED and not error_code:
                 raise ValueError("failed run requires an error code")
             now = utc_now_iso()
-            # 2. 结果、时间戳和状态作为一次写入，不能先宣称成功再补保存结果。
+            # 3. 更新 Run 状态
             await conn.execute(
                 """UPDATE runs SET status=?, answer=?, tool_trace_json=?, error_code=?,
                    started_at=?, finished_at=? WHERE id=? AND status=?""",
@@ -222,7 +227,7 @@ class RuntimeRepository:
                     current.status.value,
                 ),
             )
-            # 3. 同库事务记录恢复状态；两份 SQLite 之间没有跨库原子提交保证。
+            # 4. 更新会话状态
             await conn.execute(
                 "UPDATE threads SET updated_at=?, needs_recovery=MAX(needs_recovery,?) WHERE id=?",
                 (
@@ -231,19 +236,23 @@ class RuntimeRepository:
                     current.thread_id,
                 ),
             )
+            # 5. 返回更新后的 Run 状态
             result = await _run(conn, run_id)
         return result
 
     async def request_cancel(self, run_id):
-        """SQL先赢：CREATED直接终结，RUNNING只置请求时间，终态不可撤销。"""
+        """请求取消 Run"""
         async with self.database.transaction() as conn:
+            # 1. 查询当前 Run 状态
             current = await _run(conn, run_id)
+            # 2. 检查状态是否符合规格
             if (
                 current.status not in (RunStatus.CREATED, RunStatus.RUNNING)
                 or current.cancel_requested_at
             ):
                 return current, False
             now = utc_now_iso()
+            # 3. 更新 Run 状态为 CANCELLED
             if current.status == RunStatus.CREATED:
                 await conn.execute(
                     "UPDATE runs SET status='CANCELLED',cancel_requested_at=?,finished_at=? WHERE id=? AND status='CREATED'",
@@ -257,7 +266,7 @@ class RuntimeRepository:
             return await _run(conn, run_id), True
 
     async def complete_cancel(self, run_id, needs_recovery=False):
-        """清理结束后才能提交CANCELLED，调用幂等且不覆盖自然终态。"""
+        """成功取消 Run记录"""
         current = await self.get_run(run_id)
         if current.status not in (RunStatus.CREATED, RunStatus.RUNNING):
             return current

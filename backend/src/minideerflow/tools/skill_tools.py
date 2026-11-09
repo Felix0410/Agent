@@ -33,7 +33,7 @@ async def list_skills(runtime: ToolRuntime[AgentRunContext]) -> str:
         return json.dumps(
             context.skill_service.list_skills(context.tool_policy), ensure_ascii=False
         )
-    except Exception:  # noqa: BLE001 - 模型不接收目录/上下文底层异常
+    except Exception:
         return "ERROR[SKILL_NOT_ALLOWED]: Skill listing unavailable"
 
 
@@ -51,7 +51,7 @@ async def read_skill(name: str, runtime: ToolRuntime[AgentRunContext]) -> str:
             },
             ensure_ascii=False,
         )
-    except Exception as exc:  # noqa: BLE001 - 不返回Skill正文或路径解析异常
+    except Exception as exc:
         code = exc.code if isinstance(exc, SkillError) else "SKILL_UNAVAILABLE"
         return f"ERROR[{code}]: Skill reading unavailable"
 

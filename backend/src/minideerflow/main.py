@@ -1,11 +1,8 @@
 """FastAPI 应用与 SQLite 资源生命周期；保留 P01 调试入口。"""
-
 import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
-
 from fastapi import FastAPI
-
 from minideerflow.api.capabilities import router as capabilities_router
 from minideerflow.api.demo import router
 from minideerflow.api.files import router as files_router
@@ -32,44 +29,53 @@ from minideerflow.workspace.storage import WorkspaceStorage
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """按依赖顺序初始化资源；启动失败和正常退出都按反序释放连接。"""
+    """FastAPI 应用与 SQLite 资源生命周期管理"""
+    # 1. 初始化配置
     settings = get_settings()
     logging.getLogger("minideerflow").setLevel(settings.log_level)
     async with AsyncExitStack() as stack:
-        # 1. 先初始化业务库，并立刻登记清理，避免后续初始化失败泄漏连接。
+        # 2. 初始化数据库连接
         database = await RuntimeDatabase.open(settings.runtime_db_path)
         stack.push_async_callback(database.close)
         await database.init_schema()
-        # 2. 官方 Saver 独立持有另一个连接，不读写业务库内部状态。
+        # 3. 初始化检查点数据库连接
         saver = await stack.enter_async_context(open_checkpointer(settings.checkpoint_db_path))
+        # 4. 初始化运行时仓库
         repository = RuntimeRepository(database)
         await repository.reconcile_orphans()
         app.state.database = database
         app.state.checkpointer = saver
         app.state.repository = repository
+        # 5. 初始化计划仓库
         app.state.plans = PlanRepository(database)
         await app.state.plans.reconcile_orphaned_subtasks()
+        # 6. 初始化工作空间仓库
         storage = WorkspaceStorage(settings.workspace_root_path)
         storage.open()
         stack.callback(storage.close)
         app.state.workspace = WorkspaceService(WorkspaceRepository(database), storage)
-        # 3. worker 退出必须先于 Saver/DB 关闭，避免运行中的 Graph 使用已关闭连接。
+        # 7. 初始化事件总线
         events = EventBus()
         events.start()
         stack.push_async_callback(events.shutdown)
         app.state.events = events
+        # 8. 初始化任务注册器
         registry = TaskRegistry(
             settings.max_subagent_concurrency, settings.max_subagent_calls_per_run
         )
         app.state.task_registry = registry
         stack.push_async_callback(registry.shutdown)
+        # 9. 初始化工具注册器
         tool_registry = ToolRegistry()
         register_builtin_tools(tool_registry)
+        # 10. 初始化 MCP 工具注册器
         await register_mcp_tools(tool_registry, settings.mcp_config_path)
+        # 11. 初始化技能工具注册器
         register_skill_tools(tool_registry)
         app.state.skill_service = SkillCatalog(tool_registry)
         tool_registry.freeze()
         app.state.tool_registry = tool_registry
+        # 12. 初始化运行服务
         runner = RunService(
             repository,
             saver,
@@ -81,6 +87,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             tool_registry=tool_registry,
             skill_service=app.state.skill_service,
         )
+        # 13. 启动运行服务
         runner.start()
         stack.push_async_callback(runner.shutdown)
         app.state.runner = runner

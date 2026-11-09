@@ -16,7 +16,7 @@ MCP_OUTPUT_LIMIT = 8192
 
 
 def tool_digest(tool) -> str:
-    """以SDK实际发现的原名/描述/schema/annotations计算稳定JSON摘要。"""
+    """计算工具的稳定JSON摘要"""
     payload = {
         "name": tool.name,
         "description": tool.description or "",
@@ -30,7 +30,7 @@ def tool_digest(tool) -> str:
 
 
 def local_http_factory(url):
-    """每次请求仍核对目标，禁用代理环境变量和任何重定向。"""
+    """创建本地HTTP客户端工厂，确保请求和响应目标为指定URL"""
 
     async def check_request(request):
         if request.url != httpx.URL(url):
@@ -75,7 +75,7 @@ async def text_only_interceptor(request, handler):
 
 
 async def discover(server):
-    """每服务器单独发现，且调用时新会话仍使用同一个受控连接配置。"""
+    """发现MCP Server上的所有工具"""
     connection = {
         "transport": "streamable_http",
         "url": server.url,
@@ -105,21 +105,22 @@ def validate_local_schema(value):
 
 
 async def register_mcp_tools(registry, path):
-    """先完整验收单Server再一次性注册；故障只停用该Server。"""
+    """注册MCP Server上的所有工具"""
     try:
         settings = load_mcp_settings(path)
-    except Exception:  # noqa: BLE001 - 配置路径/凭据不能进入日志或页面
+    except Exception:
         registry.mark_unavailable("mcp_configuration", "configuration", "MCP_INVALID_CONFIG")
         return
     for server in settings.servers:
         code = "MCP_UNAVAILABLE"
         try:
-            # 1. 审批只认发现的实际元数据，未知或重复名字不自动接纳。
+            # 1. 发现所有工具
             tools = await discover(server)
             indexed = {t.name: t for t in tools}
             if len(indexed) != len(tools):
                 raise ToolPolicyError("MCP_NOT_APPROVED")
             definitions = []
+            # 2. 验证工具是否被批准
             for approved in server.tools:
                 original = indexed.get(approved.name)
                 if original is None or tool_digest(original) != approved.schema_sha256:
@@ -128,7 +129,7 @@ async def register_mcp_tools(registry, path):
                 meta = original.metadata or {}
                 if meta.get("readOnlyHint") is not True or meta.get("destructiveHint") is not False:
                     raise ToolPolicyError("MCP_NOT_APPROVED")
-                # 2. 浅克隆仅改外部别名，coroutine仍绑定SDK发现的真实原名/schema。
+                # 3. 注册工具
                 alias = f"mcp_{server.id}_{approved.name}"
                 if alias in registry.names:
                     raise ToolPolicyError("TOOL_DUPLICATE")
@@ -140,7 +141,7 @@ async def register_mcp_tools(registry, path):
                 registry.register(definition)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - MCP异常不能暴露headers/地址/底层堆栈
+        except Exception as exc:
             if isinstance(exc, ToolPolicyError):
                 code = exc.code
             for approved in server.tools:

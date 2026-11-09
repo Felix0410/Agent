@@ -11,14 +11,14 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 @asynccontextmanager
 async def open_checkpointer(path: Path) -> AsyncIterator[AsyncSqliteSaver]:
-    """打开受控本地检查点库，退出时由官方上下文管理器关闭连接。"""
+    """创建受控本地检查点库，退出时由官方上下文管理器关闭连接。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncSqliteSaver.from_conn_string(str(path)) as saver:
-        # from_conn_string 无 serde 参数；显式使用严格内置类型集合，不开放任意导入或 pickle。
+        # 设置 serde 为 JsonPlusSerializer，不开放任意导入或 pickle。
         saver.serde = JsonPlusSerializer(allowed_msgpack_modules=None)
         yield saver
 
 
 def thread_config(thread_id: str) -> RunnableConfig:
-    """同一业务 Thread 始终映射到相同 Graph 会话，不混用 run_id。"""
+    """为指定 Thread 配置 RunnableConfig，确保每个 Thread 有独立的检查点。"""
     return {"configurable": {"thread_id": thread_id}, "recursion_limit": 12}

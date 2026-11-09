@@ -35,7 +35,7 @@ class ToolDefinition:
 
 
 class ToolRegistry:
-    """全局唯一工具名；freeze后拒绝注册，不持有任何Run可变状态。"""
+    """工具注册表，管理全局唯一工具名。"""
 
     def __init__(self):
         self._tools: dict[str, ToolDefinition] = {}
@@ -44,11 +44,14 @@ class ToolRegistry:
         self._unavailable: list[dict] = []
 
     def register(self, definition: ToolDefinition):
-        """工具对象及其公开schema为唯一事实源，不复制schema定义。"""
+        """注册工具"""
+        # 1. 校验注册状态是否冻结
         if self._frozen:
             raise ToolPolicyError("TOOL_REGISTRY_FROZEN")
+        # 2. 校验工具名称是否重复
         if definition.name in self._tools:
             raise ToolPolicyError("TOOL_DUPLICATE")
+        # 3. 校验工具定义是否符合要求
         if (
             not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", definition.name)
             or definition.name != definition.tool.name
@@ -58,18 +61,23 @@ class ToolRegistry:
             or definition.permission not in ("read", "write", "orchestrate")
         ):
             raise ToolPolicyError("TOOL_INVALID_DEFINITION")
+        # 4. 注册工具
         self._tools[definition.name] = definition
 
     def freeze(self):
-        """lifespan完成装配后关闭注册入口。"""
+        """冻结注册表，拒绝新注册。"""
         self._frozen = True
         return self
 
     def get(self, name: str) -> ToolDefinition:
+        """获取工具定义"""
+        # 1. 校验工具是否在线
         if name in self._offline:
             raise ToolPolicyError("MCP_UNAVAILABLE")
+        # 2. 校验工具是否存在
         if name not in self._tools:
             raise ToolPolicyError("TOOL_NOT_ALLOWED")
+        # 3. 返回工具定义
         return self._tools[name]
 
     @property
@@ -77,7 +85,7 @@ class ToolRegistry:
         return frozenset(self._tools.keys() - self._offline)
 
     def list_allowed(self, policy: ToolPolicy) -> list[BaseTool]:
-        """默认DENY；名字与能力级别必须同时获准。"""
+        """根据策略筛选可执行工具"""
         return [
             d.tool
             for n, d in sorted(self._tools.items())

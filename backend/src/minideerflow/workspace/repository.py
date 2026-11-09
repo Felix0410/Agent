@@ -15,20 +15,26 @@ from minideerflow.workspace.models import (
 
 
 class WorkspaceRepository:
+    """文件元数据仓库"""
+
     def __init__(self, database: RuntimeDatabase) -> None:
+        """初始化文件元数据仓库"""
         self.database = database
 
     async def _thread(self, conn: aiosqlite.Connection, thread_id: str) -> None:
+        """验证线程是否存在"""
         async with conn.execute("SELECT 1 FROM threads WHERE id=?", (thread_id,)) as cursor:
             if await cursor.fetchone() is None:
                 raise WorkspaceError("THREAD_NOT_FOUND", "Thread not found", 404)
         validate_uuid(thread_id)
 
     async def check_thread(self, thread_id: str) -> None:
+        """验证线程是否存在"""
         async with self.database.transaction() as conn:
             await self._thread(conn, thread_id)
 
     async def _quota(self, conn: aiosqlite.Connection, file: FileRecord) -> None:
+        """验证线程配额是否足够"""
         async with conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(size_bytes),0) FROM files WHERE thread_id=?",
             (file.thread_id,),
@@ -38,6 +44,7 @@ class WorkspaceRepository:
             raise WorkspaceError("WORKSPACE_QUOTA_EXCEEDED", "Thread file quota exceeded", 409)
 
     async def _insert_file(self, conn: aiosqlite.Connection, file: FileRecord) -> None:
+        """插入文件元数据"""
         await conn.execute(
             """INSERT INTO files(id,thread_id,run_id,display_name,storage_key,kind,mime,
                size_bytes,sha256,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
@@ -56,9 +63,11 @@ class WorkspaceRepository:
         )
 
     async def register_upload(self, file: FileRecord) -> FileRecord:
-        """配额检查与插入共用事务，不能因两个并行上传越过额度。"""
+        """登记上传文件"""
+        # 1. 验证文件类型
         if file.kind != FileKind.UPLOAD or file.run_id is not None:
             raise WorkspaceError("INVALID_FILE_PATH", "Invalid upload metadata", 422)
+        # 2. 验证线程、配额、文件大小是否满足要求
         async with self.database.transaction() as conn:
             await self._thread(conn, file.thread_id)
             await self._quota(conn, file)
@@ -66,6 +75,7 @@ class WorkspaceRepository:
         return file
 
     async def list_files(self, thread_id: str) -> list[FileRecord]:
+        """列出线程下所有文件"""
         async with self.database.transaction() as conn:
             await self._thread(conn, thread_id)
             async with conn.execute(
@@ -75,6 +85,7 @@ class WorkspaceRepository:
                 return [FileRecord(**dict(row)) for row in await cursor.fetchall()]
 
     async def get_file(self, file_id: str) -> FileRecord:
+        """获取文件元数据"""
         async with self.database.transaction() as conn:
             async with conn.execute("SELECT * FROM files WHERE id=?", (file_id,)) as cursor:
                 row = await cursor.fetchone()
@@ -83,6 +94,7 @@ class WorkspaceRepository:
             return FileRecord(**dict(row))
 
     async def _run(self, conn: aiosqlite.Connection, thread_id: str, run_id: str) -> None:
+        """验证线程下是否存在当前运行的 Run"""
         validate_uuid(run_id)
         await self._thread(conn, thread_id)
         async with conn.execute(
@@ -93,12 +105,12 @@ class WorkspaceRepository:
                 raise WorkspaceError("INVALID_FILE_PATH", "Run is not active in this thread", 422)
 
     async def check_run(self, thread_id: str, run_id: str) -> None:
-        """文件工具只允许当前真实 Run 使用本 Thread，Prompt/JSON 不提供身份。"""
+        """验证线程下是否存在当前运行的 Run"""
         async with self.database.transaction() as conn:
             await self._run(conn, thread_id, run_id)
 
     async def get_file_for_thread(self, thread_id: str, file_id: str) -> FileRecord:
-        """归属不符与未知 ID 均返回404，校验完成后调用方才能触碰磁盘。"""
+        """获取线程下文件元数据"""
         async with self.database.transaction() as conn:
             await self._thread(conn, thread_id)
             async with conn.execute(
@@ -110,11 +122,13 @@ class WorkspaceRepository:
             return FileRecord(**dict(row))
 
     async def register_artifact(self, file: FileRecord) -> ArtifactRecord:
-        """真实文件与Artifact双表原子登记，同时检查Run归属、额度与同名冲突。"""
+        """登记Agent生成文件的元数据"""
         from uuid import uuid4
 
+        # 1. 验证文件类型
         if file.kind != FileKind.ARTIFACT or file.run_id is None:
             raise WorkspaceError("INVALID_FILE_PATH", "Invalid artifact metadata", 422)
+        # 2. 创建Artifact元数据
         artifact = ArtifactRecord(
             artifact_id=str(uuid4()),
             file_id=file.id,
@@ -126,12 +140,13 @@ class WorkspaceRepository:
             created_at=file.created_at,
         )
         async with self.database.transaction() as conn:
-            # 1. 登记前再次验证活动Run，不能只依赖磁盘写入前的快照。
+            # 3. 验证线程下是否存在当前运行的 Run以及配额是否满足要求
             await self._run(conn, file.thread_id, file.run_id)
             await self._quota(conn, file)
             try:
-                # 2. 两表同事务，名称冲突由部分UNIQUE索引无覆盖兜底。
+                # 4. 插入文件元数据
                 await self._insert_file(conn, file)
+                # 5. 插入Artifact元数据
                 await conn.execute(
                     "INSERT INTO artifacts(id,file_id,thread_id,run_id,created_at) VALUES(?,?,?,?,?)",
                     (artifact.artifact_id, file.id, file.thread_id, file.run_id, file.created_at),
@@ -146,6 +161,7 @@ class WorkspaceRepository:
                 ) from None
         return artifact
 
+    # 查询Artifact元数据的sql
     _ARTIFACT_QUERY = """SELECT a.id AS artifact_id, a.file_id, a.thread_id, a.run_id, a.created_at,
         f.display_name, f.size_bytes, f.mime FROM artifacts a
         JOIN files f ON f.id=a.file_id AND f.thread_id=a.thread_id AND f.run_id=a.run_id
@@ -153,8 +169,7 @@ class WorkspaceRepository:
         WHERE f.kind='ARTIFACT' """
 
     async def list_artifacts(self, thread_id: str) -> list[ArtifactRecord]:
-        """只列出file/run/thread关联一致的真实产物，不按磁盘扫描推测。"""
-
+        """列出线程下所有Artifact元数据"""
         async with self.database.transaction() as conn:
             await self._thread(conn, thread_id)
             async with conn.execute(
@@ -164,8 +179,7 @@ class WorkspaceRepository:
                 return [ArtifactRecord(**dict(row)) for row in await cursor.fetchall()]
 
     async def get_artifact(self, thread_id: str, artifact_id: str) -> ArtifactRecord:
-        """归属错配与未知产物均不可读取，不泄露其它会话的资源。"""
-
+        """获取线程下指定Artifact元数据"""
         async with self.database.transaction() as conn:
             await self._thread(conn, thread_id)
             async with conn.execute(
@@ -177,7 +191,7 @@ class WorkspaceRepository:
             return ArtifactRecord(**dict(row))
 
     async def discard_upload(self, file: FileRecord) -> None:
-        """只补偿本次已知UUID/内部键上传，不删除产物或其它资源。"""
+        """删除线程下指定上传文件的元数据"""
         async with self.database.transaction() as conn:
             await conn.execute(
                 "DELETE FROM files WHERE id=? AND storage_key=? AND thread_id=? AND kind='UPLOAD' AND run_id IS NULL",

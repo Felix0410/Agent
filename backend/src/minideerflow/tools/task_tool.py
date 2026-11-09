@@ -1,4 +1,4 @@
-"""父 Agent 委派入口：公开 Schema 没有身份/路径/权限字段。"""
+"""子任务工具"""
 
 from langchain.tools import ToolRuntime, tool
 
@@ -17,14 +17,17 @@ async def task(
 ) -> str:
     """Delegate a focused goal (1-1000 chars) to general or research. Both are read-only; research uses existing material, not the internet. Optional todo_id must belong to this run. No more than four tasks per run."""
     try:
+        # 1. 检查上下文是否有效
         context = runtime.context
         if not isinstance(context, AgentRunContext) or not isinstance(
             context.task_dispatcher, TaskDispatcher
         ):
             raise PlanError("SUBTASK_CONTEXT_INVALID")
+        # 2. 调用任务分发器委派任务
         result = await context.task_dispatcher.dispatch(context, agent_type, description, todo_id)
         if result.error_code:
             return f"ERROR[{result.error_code}]: " + result.model_dump_json()
+        # 3. 返回任务结果
         return result.model_dump_json()
     except BudgetError:
         raise

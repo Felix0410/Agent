@@ -1,4 +1,4 @@
-"""真实 State 工具，ToolMessage ID 必须匹配当前框架调用。"""
+"""计划任务工具"""
 
 import json
 
@@ -18,12 +18,15 @@ async def write_todos(
 ) -> Command:
     """Replace the complete plan (1-8 items). Preserve existing todo_id values; never revert completed items. Use pending/in_progress/completed. Only one write_todos call per model step."""
     try:
+        # 1. 检查上下文是否有效
         context = runtime.context
         if not isinstance(context, AgentRunContext) or not isinstance(
             context.todo_service, PlanService
         ):
             raise PlanError("TODO_CONTEXT_INVALID")
+        # 2. 调用计划服务更新计划
         todos = await context.todo_service.write_todos(context, items, runtime.state)
+        # 3. 更新计划任务以及追加一条工具回执消息
         return Command(
             update={
                 "todos": todos,
@@ -35,8 +38,9 @@ async def write_todos(
                 ],
             }
         )
-    except Exception as exc:  # noqa: BLE001 - 工具边界隐藏底层异常
+    except Exception as exc:
         code = exc.code if isinstance(exc, PlanError) else "TODO_UNAVAILABLE"
+        # 4. 失败时添加一条错误消息
         return Command(
             update={
                 "messages": [
