@@ -1,7 +1,7 @@
 # 总体业务与系统架构（正式方案）
 
-**版本**：v1.6 · 2026-11-06
-**状态**：V1 总体架构确定；P01–P05 已有真实实现，P02–P05 仍待用户手动验收；P06 预算/上下文压缩/取消与恢复已实现并局部验证，**P06为PENDING_REVIEW**。实际进度以 [DEVELOPMENT.md](DEVELOPMENT.md) 和 `docs/progress/` 为准。
+**版本**：v1.7 · 2026-11-09
+**状态**：V1 总体架构确定；P01–P06 已有真实代码，P02–P06 仍待用户手动验收；P07 Deep Research 详细方案与逐文件实施合同已完成，**P07 业务代码尚未开发（PLAN_READY）**。开发前先复测P06最新注释提交的格式/直接回归。实际进度以 [DEVELOPMENT.md](DEVELOPMENT.md) 和 `docs/progress/` 为准。
 **参考基线**：[DeerFlow 2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，commit `7e7f0410797693cf882594555ba414e0361d4c6f`。本项目自行实现，不 Fork 原项目。
 
 ## 1. 目标与边界
@@ -150,6 +150,14 @@ P06 不替换 P05 `ToolGuardMiddleware` 或 P04 `create_agent`，而是通过官
 当前 SQLite `runs.status` 已允许 CANCELLED，但不支持 CANCELLING，P06 **不重建状态表**：以 `cancel_requested_at` 持久标记“请求取消中”，而非提前改变终态。CREATED 可直接 CANCELLED 并由队列跳过；RUNNING 取消仅终止当前独立 Graph Task，并在 P04 Child 与 Workspace/SQLite 归档后转 CANCELLED；外部副作用结果不可确认时 FAILED/OUTCOME_UNKNOWN 与 Thread 保守恢复。后端 Run 时限升至600秒时，前端轮询必须相应升至720秒，SSE 断线只断订阅、不取消 Run。
 
 API 增 `GET /api/runs/{run_id}/usage` 与 `POST /api/runs/{run_id}/cancel`，Web 增 `UsagePanel`/取消按钮，继承全部 Thread/Run/Todo/Task/Artifact/MCP/Skill 行为。具体文件/状态规则参见 [P06 详细设计](DEVELOPMENT.md) 和 [P06-A/B/C/D Codex 执行合同](tasks/P06-ABCD.md)。
+
+### 3.7 P07 Deep Research 结构化证据闭环（设计态）
+
+P07 不引入第二个 LangGraph主循环。现有 P04 Lead/Todo/Research Child、P05 ToolRegistry/Skills、P06 共享预算/取消与P03 Workspace组成真实网络研究链。仅当用户明确配置Tavily API key时，在Registry增加三个只读研究工具`search_web(query)`/`fetch_webpage(evidence_id)`/`list_evidence()`及仅Lead可用的`save_research_report`。没有key时，普通Agent依旧离线可用，不宣称已联网。
+
+**安全变更**：ResearchChild只增加前三个`read`研究工具，General不变，Child仍无写文件、委派、MCP/Skills。Child必须经过ToolGuard与父Policy/白名单的交集，并以P06共享Tracker记录**一次**工具调用，不重复安装旧ChildToolBudgetMiddleware。EvidenceStore存于同一个Run/Thread业务SQLite，最多6个Search调用/8个Extract/30来源/1报告；Source ID由服务端生成并核验，不信任模型生成的“来源”。
+
+搜索经固定Tavily HTTPS Search API，网页正文由固定Tavily Extract API通过已登记Evidence ID抓取（**没有本机直接访问任意模型URL的HTTP接口**）。来源保留SNIPPET_ONLY/EXTRACTED/EXTRACTION_FAILED的精确定义；“已提取正文”不代表独立核实了事实。报告Markdown由服务器校验真实来源ID后生成脚注，经P03注册真实Artifact后才显示可下载。React只读`ResearchPanel`可刷新查历史，SSE仅小状态事件，不包含正文/密钥。详细合同：[P07开发方案](DEVELOPMENT.md)、[P07逐文件Codex任务](tasks/P07-ABCD.md)。
 
 ## 4. 模块职责与接口
 
