@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P01–P05 的实际 Python/React 代码已在开发分支实现；P02/P03/P04/P05 均为 PENDING_REVIEW，等待用户最终手动验收。P06 Run预算、上下文压缩、取消与恢复已实现并局部验证，状态 PENDING_REVIEW。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P01–P06 实际代码已在开发分支实现；P02–P06 仍为 PENDING_REVIEW，等待用户最终手动验收。P07 Deep Research 已完成详细设计与 A/B/C/D Codex 合同，当前仅 PLAN_READY、尚未编码或测试。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -39,6 +39,7 @@
 | [P04-A/B/C/D Codex 任务书](docs/tasks/P04-ABCD.md) | P04 Todo 状态、受限子代理、并发/事件与 Demo 的逐文件任务及测试 |
 | [P05-A/B/C/D Codex 任务书](docs/tasks/P05-ABCD.md) | ToolRegistry/ToolGuard、本地 MCP Server、Skills 与前端测试的精确文件/接口/验证要求 |
 | [P06-A/B/C/D Codex 任务书](docs/tasks/P06-ABCD.md) | 父子共享Run预算、真实/估算Usage、长工具输出引用、Graph历史压缩、取消与恢复逐文件实现 |
+| [P07-A/B/C/D Codex 任务书](docs/tasks/P07-ABCD.md) | Tavily固定API、真实EvidenceStore、受限Research Child、结构化报告、前端与测试 |
 | [代码可读性与 Codex 规则](AGENTS.md) | 中文注释、复杂逻辑编号分段、只测本次变更、同步前端 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
@@ -417,3 +418,16 @@ uv run pytest -q tests/test_budget.py tests/test_usage.py tests/test_budget_demo
 真实deepseek-flash在临时阈值下完成4次摘要+3次文件工具，Provider输入9081/输出2663，估算45724，约22.56秒；Checkpoint剩9条消息且当前目标保留，1256-byte产物浏览器/HTTP/SHA一致。取消后新会话成功，已完成9次模型调用合计Provider报告12808 tokens；另有一次取消调用未返回用量，保持未知，不能当作免费。
 
 所有Smoke使用独立8006/5176、临时两库/Workspace和合成文件，已关闭清理，未动用户.env和原服务。浏览器验证Usage、预览、取消中/终态、刷新/会话切换与下载；PyCharm GUI、其它OS、真实模型下再次委派child本轮未直接验证，child/MCP故障和恢复由Fake+真实Graph/SDK覆盖。P06为PENDING_REVIEW，等待用户手动Demo；不合并main、不进入P07。
+
+
+## P07 Deep Research（PLAN_READY，仅设计，尚未编码）
+
+已在 `feat/p07-deep-research` 开发分支完成 [正式详细方案](docs/DEVELOPMENT.md)、[Codex P07-A/B/C/D 逐文件任务](docs/tasks/P07-ABCD.md)、[P07 进度](docs/progress/P07.md) 与架构更新。当前分支继承 P06 已实现代码，没有新增 P07 Research Service / Tavily Tool / 研究报告实际能力；**无 P07 pytest、Ruff或公网搜索联调通过记录**。
+
+最终用户链路：研究问题 → Lead按需制定Todo与读取`deep-research` Skill → `search_web`取得真实URL和业务SQLite证据ID → `fetch_webpage(evidence_id)` 通过Tavily Extract获取有界正文 → 仅被批准的ResearchChild并行研究 → Lead `save_research_report` 将真实证据ID转换成Markdown引文 → P03 Workspace登记报告 Artifact → React ResearchPanel显示来源等级和下载。
+
+安全选择：**默认不联网**，需要用户自行在本地配置`TAVILY_API_KEY`（不提交Git/不放给前端或模型）。只连接固定Tavily Search/Extract HTTPS API；绝不允许模型输入任意URL让本机发起HTTP抓取。搜索条目仅`SNIPPET_ONLY`、Provider有正文才`EXTRACTED`，不能将提取结果宣称为事实独立核验。每Run最多6个Search请求、8个Extract请求、30项来源、1份报告；P06父子共享用量/超时/取消规则继续有效。General仍离线，ResearchChild可用仅3个只读联网工具、无写文件/MCP/Skills/再次委派。没有Tavily Key仍能运行Fake Mock和所有P01–P06既有功能。
+
+P07依次实施 A Provider+Evidence+基础UI，B ResearchChild受控联网，C Skill+结构化引用+报告文件，D本地Fake/可用时真实网络与浏览器联调。**编码前必须先完成P07-0代码质量检查**：P06最新`f291af58`注释Commit存在已确认行尾空格和潜在Ruff格式问题；检查`git diff --check HEAD~1 HEAD`、Ruff、局部受影响pytest、前端build，仅最小修复格式，不重写旧业务。未过门槛不开始P07-A。
+
+本阶段代码完整交付后只能标`PENDING_REVIEW`，待用户亲自运行联网研究Demo；不能自动给P06或以前阶段写`ACCEPTED`，也不能自动进入P08。
