@@ -1147,7 +1147,7 @@ React 新增 `frontend/src/components/ResearchPanel.tsx` 和 `frontend/src/api/r
 
 #### 7. A/B/C/D 分解（每项单独提交、更新前端）
 
-**P07-0 · 开始编码前的质量门槛**：先根据 `feat/p06-context-budget-cancel` 现有 HEAD 检查 `git status -sb`、`git diff --check HEAD~1 HEAD`、`uv run ruff check src tests examples`、`uv run ruff format --check src tests examples`、P06 必要回归与 React build。最新 P06“注释优化”Commit 已确认至少一处行尾空格，并变更了 `main.py` 导入格式、去除部分 `noqa`；**目前不能声称这些检查已通过**。如果失败，仅单独提交**最小格式/注释修正**，记录在 P07 progress，严禁借机改 P06 业务逻辑或虚构 P06 人工验收。检查通过后开始 A，未通过就停下报告。Git 远端提交历史本身正常，不必重写 Git 配置、强推或合并 main。
+**P07-0 · 开始编码前的质量门槛**：先根据 `feat/p06-context-budget-cancel` 的注释提交 `f291af58bfec249eeae55823739b7c12a47ab8bf` 核对 `git status -sb`、`git diff --check f291af58^ f291af58`（用于定位既有行尾问题，**此历史比较预期会报错，并不是可在新分支修复为通过的门槛**）、`uv run ruff check src tests examples`、`uv run ruff format --check src tests examples`、P06 必要回归与 React build；修正后还要 `git diff --check feat/p06-context-budget-cancel...HEAD`（检查 P07 新变更）。最新 P06“注释优化”Commit 已确认至少一处行尾空格，并变更了 `main.py` 导入格式、去除部分 `noqa`；**目前不能声称这些检查已通过**。如果失败，仅单独提交**最小格式/注释修正**，记录在 P07 progress，严禁借机改 P06 业务逻辑或虚构 P06 人工验收。检查通过后开始 A，未通过就停下报告。Git 远端提交历史本身正常，不必重写 Git 配置、强推或合并 main。
 
 **P07-A · Provider/搜索/取文/证据初版**：建研究模型/URL规则/TavilyProvider/SQL请求额度及EvidenceStore、search_web/fetch_webpage/list_evidence真实 ToolRuntime及Guard，Lead可搜索；增加只读 GET research/status/evidence 与 ResearchPanel 最小列表。Fake+MockTransport 不使用 Tavily Key：验证真实Schema、Search API转换、Extract结果/failed_results、同Run归属、6/8/30 SQL原子配额、链接校验、缺Key降级、Provider 超时与取消。每项测试后前端可见实际来源/状态；提交 A SHA。
 
