@@ -37,7 +37,7 @@ export default function CapabilityPanel() {
         刷新能力目录
       </button>
       <p>
-        只读目录；MCP状态来自启动发现和实际调用；故障后停用，配置或服务恢复后需重启后端。research仅分析已有材料，不联网。
+        只读目录；MCP状态来自启动发现和实际调用；故障后停用，配置或服务恢复后需重启后端。General保持离线；Research仅在已注册Tavily工具时可只读联网。
       </p>
       {error && <p role="alert">{error}</p>}
       {loading && <p>正在读取目录…</p>}

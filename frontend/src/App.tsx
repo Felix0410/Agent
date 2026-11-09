@@ -216,9 +216,8 @@ export default function App() {
       <CapabilityPanel />
       <footer>
         当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02 会话记忆 / 后台 Run /
-        SSE。P03 上传 / 文件工具 / Artifact。P04 Todo / 只读子代理委派（research
-        无联网）。P05 工具目录 / 本机 MCP / 按需 Skills。P07 共享预算 / 自动摘要
-        / 主动取消。
+        SSE。P03 上传 / 文件工具 / Artifact。P04 Todo / 只读子代理委派。P05 工具目录 / 本机 MCP / 按需 Skills。P06 共享预算 / 自动摘要
+        / 主动取消。P07 Tavily研究 / 证据 / 引用报告。
       </footer>
     </main>
   );

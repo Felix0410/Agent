@@ -8,9 +8,24 @@ from minideerflow.main import create_app
 def test_builtin_catalog_readonly():
     with TestClient(create_app()) as client:
         tools = client.get("/api/tools").json()
-        assert len(tools) == 8 and all(t["availability"] == "available" for t in tools)
+        # P07无Key只新增不可用状态，不改变原八个可执行工具。
+        available = [t for t in tools if t["availability"] == "available"]
+        assert len(available) == 8
+        assert (
+            next(t for t in tools if t["name"] == "research")["availability"]
+            == "RESEARCH_UNAVAILABLE"
+        )
+        assert not {"search_web", "fetch_webpage", "list_evidence", "save_research_report"} & {
+            t["name"] for t in available
+        }
         assert [t["name"] for t in tools] == sorted(t["name"] for t in tools)
-        assert client.get("/api/skills").json()[0]["name"] == "file-analysis"
+        skills = client.get("/api/skills").json()
+        assert (
+            next(s for s in skills if s["name"] == "file-analysis")["availability"] == "available"
+        )
+        assert (
+            next(s for s in skills if s["name"] == "deep-research")["availability"] != "available"
+        )
         assert client.post("/api/tools", json={}).status_code == 405
 
 

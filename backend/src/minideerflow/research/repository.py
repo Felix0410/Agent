@@ -113,7 +113,15 @@ class ResearchRepository:
                 return item
         raise ResearchError("RESEARCH_EVIDENCE_NOT_FOUND")
 
-    async def update_extract(self, run_id, thread_id, request_id, evidence_id, text):
+    async def update_extract(
+        self,
+        run_id,
+        thread_id,
+        request_id,
+        evidence_id,
+        text,
+        error_code="RESEARCH_EXTRACTION_FAILED",
+    ):
         async with self.database.transaction() as conn:
             await self._identity(conn, run_id, thread_id, active=True)
             await self._pending(conn, request_id, run_id, "EXTRACT")
@@ -138,7 +146,7 @@ class ResearchRepository:
                 "UPDATE research_requests SET status=?,error_code=?,finished_at=? WHERE id=?",
                 (
                     "SUCCEEDED" if text else "FAILED",
-                    None if text else "RESEARCH_EXTRACTION_FAILED",
+                    None if text else error_code,
                     now(),
                     request_id,
                 ),
@@ -212,3 +220,11 @@ class ResearchRepository:
             citations=citations,
             limitations=json.loads(row["limitations_json"]),
         )
+
+    async def finish_run_requests(self, run_id):
+        """终态Run未取得确认回执的占位只能标UNKNOWN，不能重新发网络。"""
+        async with self.database.transaction() as conn:
+            await conn.execute(
+                "UPDATE research_requests SET status='UNKNOWN',finished_at=?,error_code='RESEARCH_INTERRUPTED' WHERE run_id=? AND status='PENDING'",
+                (now(), run_id),
+            )

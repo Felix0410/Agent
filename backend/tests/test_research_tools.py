@@ -90,3 +90,27 @@ def test_real_toolnode_search_extract(monkeypatch):
         assert c.get(f"/api/runs/{rid}/research/report").json() is None
     with TestClient(create_app()) as c:
         assert c.get(f"/api/runs/{rid}/research/evidence").json() == rows
+
+
+def test_configured_simple_question_never_searches(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "test-only")
+    get_settings.cache_clear()
+    calls = []
+
+    async def unexpected(self, query, max_results=5):
+        calls.append(query)
+        raise AssertionError("simple question must not search")
+
+    monkeypatch.setattr(TavilyProvider, "search", unexpected)
+    monkeypatch.setattr(
+        runner, "build_chat_model", lambda s: ScriptedModel(responses=[AIMessage(content="Hello")])
+    )
+    app = create_app()
+    with TestClient(app) as c:
+        tid = c.post("/api/threads", json={}).json()["id"]
+        rid = c.post(f"/api/threads/{tid}/runs", json={"message": "Hello"}).json()["run_id"]
+        drain(c, app)
+        assert c.get(f"/api/runs/{rid}").json()["status"] == "SUCCEEDED"
+        assert c.get(f"/api/runs/{rid}/usage").json()["tool_calls"] == 0
+        assert c.get(f"/api/runs/{rid}/research/evidence").json() == [] and calls == []
+        assert "test-only" not in c.get("/api/research/status").text

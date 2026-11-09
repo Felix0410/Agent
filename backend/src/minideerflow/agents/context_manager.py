@@ -73,6 +73,11 @@ class ContextManager:
             valid = {f.id for f in files if f.id in old_text} | {
                 a.artifact_id for a in artifacts if a.artifact_id in old_text
             }
+            # P07仅保护当前Run真实证据，旧Run/模型杜撰来源不能进入报告引用。
+            research = getattr(context, "research_service", None)
+            if research is not None:
+                evidence = await research.repository.list(context.run_id, context.thread_id)
+                valid.update(item.id for item in evidence if item.id in old_text)
             text = re.sub(
                 r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
                 lambda match: match[0].lower() if match[0].lower() in valid else "[unverified-id]",

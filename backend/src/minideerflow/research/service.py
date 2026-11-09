@@ -69,10 +69,10 @@ class ResearchService:
             await self._check(context)
             try:
                 text = await self.provider.extract(item.url)
-            except ResearchError:
+            except ResearchError as exc:
                 # Provider错误仍写真实证据等级，最终错误类别保存在请求表。
                 await self.repository.update_extract(
-                    context.run_id, context.thread_id, request_id, item.id, None
+                    context.run_id, context.thread_id, request_id, item.id, None, exc.code
                 )
                 raise
             await self._check(context)
@@ -86,10 +86,11 @@ class ResearchService:
                 exc.code if isinstance(exc, ResearchError) else "RESEARCH_REQUEST_UNKNOWN",
             )
             if isinstance(exc, ResearchError):
+                current = await self.repository.get(context.run_id, context.thread_id, item.id)
                 await safe_emit(
                     context,
                     "research_evidence_updated",
-                    {"evidence_id": item.id, "status": "EXTRACTION_FAILED"},
+                    {"evidence_id": item.id, "status": current.source_status.value},
                 )
             raise
         await safe_emit(

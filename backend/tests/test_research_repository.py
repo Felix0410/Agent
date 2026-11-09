@@ -75,6 +75,10 @@ async def test_dedup_and_extract_status(tmp_path):
             req = await repo.reserve(rid, tid, "SEARCH", "q")
             items = await repo.add_search(rid, tid, req, [hit, hit])
         assert len(items) == 1
+        other_thread = await runs.create_thread()
+        other_run = await runs.create_run(other_thread.id, "other")
+        with pytest.raises(ResearchError):
+            await repo.get(other_run.id, other_thread.id, items[0].id)
         req = await repo.reserve(rid, tid, "EXTRACT", items[0].url)
         item = await repo.update_extract(rid, tid, req, items[0].id, "actual text")
         assert item.source_status == "EXTRACTED" and item.content_sha256

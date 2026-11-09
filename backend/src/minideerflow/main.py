@@ -87,8 +87,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await register_mcp_tools(tool_registry, settings.mcp_config_path)
         # 11. 初始化技能工具注册器
         register_skill_tools(tool_registry)
-        app.state.skill_service = SkillCatalog(tool_registry)
         tool_registry.freeze()
+        app.state.skill_service = SkillCatalog(tool_registry)
         app.state.tool_registry = tool_registry
         # 12. 初始化运行服务
         runner = RunService(

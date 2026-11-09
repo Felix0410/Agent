@@ -1,7 +1,7 @@
 # 总体业务与系统架构（正式方案）
 
 **版本**：v1.7 · 2026-11-09
-**状态**：V1 总体架构确定；P01–P06 已有真实代码，P02–P06 仍待用户手动验收；P07 Deep Research 详细方案与逐文件实施合同已完成，**P07 业务代码尚未开发（PLAN_READY）**。开发前先复测P06最新注释提交的格式/直接回归。实际进度以 [DEVELOPMENT.md](DEVELOPMENT.md) 和 `docs/progress/` 为准。
+**状态**：V1 总体架构确定；P01–P06 已有真实代码，P02–P06 仍待用户手动验收；P07 Deep Research已实现并局部验证，**P07 PENDING_REVIEW**；无Tavily Key，真实公网Search/Extract待验证。P07-0已修复基线格式并通过局部检查。实际进度以 [DEVELOPMENT.md](DEVELOPMENT.md) 和 `docs/progress/` 为准。
 **参考基线**：[DeerFlow 2.0.0](https://github.com/bytedance/deer-flow/tree/v2.0.0)，commit `7e7f0410797693cf882594555ba414e0361d4c6f`。本项目自行实现，不 Fork 原项目。
 
 ## 1. 目标与边界
@@ -151,7 +151,7 @@ P06 不替换 P05 `ToolGuardMiddleware` 或 P04 `create_agent`，而是通过官
 
 API 增 `GET /api/runs/{run_id}/usage` 与 `POST /api/runs/{run_id}/cancel`，Web 增 `UsagePanel`/取消按钮，继承全部 Thread/Run/Todo/Task/Artifact/MCP/Skill 行为。具体文件/状态规则参见 [P06 详细设计](DEVELOPMENT.md) 和 [P06-A/B/C/D Codex 执行合同](tasks/P06-ABCD.md)。
 
-### 3.7 P07 Deep Research 结构化证据闭环（设计态）
+### 3.7 P07 Deep Research 结构化证据闭环（PENDING_REVIEW）
 
 P07 不引入第二个 LangGraph主循环。现有 P04 Lead/Todo/Research Child、P05 ToolRegistry/Skills、P06 共享预算/取消与P03 Workspace组成真实网络研究链。仅当用户明确配置Tavily API key时，在Registry增加三个只读研究工具`search_web(query)`/`fetch_webpage(evidence_id)`/`list_evidence()`及仅Lead可用的`save_research_report`。没有key时，普通Agent依旧离线可用，不宣称已联网。
 

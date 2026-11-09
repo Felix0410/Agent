@@ -49,7 +49,7 @@ class TavilyProvider:
                 if "application/json" not in response.headers.get("content-type", "").lower():
                     raise ResearchError("RESEARCH_INVALID_RESPONSE")
                 raw = bytearray()
-                async for chunk in response.aiter_bytes():
+                async for chunk in response.aiter_bytes(chunk_size=65536):
                     raw.extend(chunk)
                     if len(raw) > 1024 * 1024:
                         raise ResearchError("RESEARCH_RESPONSE_TOO_LARGE")
@@ -104,6 +104,18 @@ class TavilyProvider:
         results = data.get("results", [])
         if not isinstance(results, list):
             raise ResearchError("RESEARCH_INVALID_RESPONSE")
+        failures = data.get("failed_results", [])
+        if not isinstance(failures, list):
+            raise ResearchError("RESEARCH_INVALID_RESPONSE")
+        for failure in failures:
+            if not isinstance(failure, dict):
+                continue
+            try:
+                failed_url = canonical_url(failure.get("url"))
+            except ResearchError:
+                continue
+            if failed_url == url:
+                raise ResearchError("RESEARCH_EXTRACTION_FAILED")
         for item in results:
             if not isinstance(item, dict):
                 continue

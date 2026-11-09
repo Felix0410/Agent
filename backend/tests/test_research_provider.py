@@ -106,3 +106,24 @@ async def test_response_size_bound():
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"results": None},
+        {
+            "results": [{"url": "https://example.com/", "raw_content": "body"}],
+            "failed_results": [{"url": "https://example.com/"}],
+        },
+        {"results": [{"url": "file:///etc/passwd", "raw_content": "bad"}]},
+        {"results": [{"url": "https://example.com/", "raw_content": 42}]},
+    ],
+)
+async def test_malformed_or_conflicting_extract_never_succeeds(body):
+    provider = TavilyProvider(
+        SecretStr("fake"), transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body))
+    )
+    with pytest.raises(ResearchError):
+        await provider.extract("https://example.com/")

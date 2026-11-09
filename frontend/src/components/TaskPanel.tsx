@@ -47,7 +47,7 @@ export default function TaskPanel({
         <article key={item.id}>
           <strong>
             {item.agent_type}
-            {item.agent_type === "research" && "（仅已有材料，无联网）"} ·{" "}
+            {item.agent_type === "research" && "（只读；联网取决于研究配置）"} ·{" "}
             {item.status}
           </strong>
           <p>{item.description}</p>

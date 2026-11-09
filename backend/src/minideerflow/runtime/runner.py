@@ -285,7 +285,14 @@ class RunService:
                     if p04
                     else [UsageBudgetMiddleware(), ChildToolBudgetMiddleware("parent")],
                     prompt_suffix=(
-                        " For complex tasks use write_todos and keep the complete plan updated. Use task to delegate focused goals to general/research (existing material only, no internet). Child agents cannot write files; use write_text yourself for a final artifact. Report failures honestly. Simple questions need no plan or delegation."
+                        " For complex tasks use write_todos and keep the complete plan updated. "
+                        "Use task to delegate focused goals. General is offline. "
+                        + (
+                            "Research may use registered read-only web tools and return Findings + Evidence IDs + Missing. "
+                            if self.research_service and self.research_service.provider is not None
+                            else "Research analyzes existing material only, no internet. "
+                        )
+                        + "Child agents cannot write files. Lead saves the final artifact. Report failures honestly. Simple questions need no plan or delegation."
                         if p04
                         else ""
                     )
@@ -334,6 +341,8 @@ class RunService:
             finally:
                 # 7.3 关闭当前run下的子任务
                 await self.task_registry.close_run(run.id)
+                if self.research_service:
+                    await self.research_service.repository.finish_run_requests(run.id)
                 await tracker.flush()
             if tracker.outcome_unknown:
                 raise BudgetError("OUTCOME_UNKNOWN")

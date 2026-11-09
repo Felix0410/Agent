@@ -2,7 +2,7 @@
 
 轻量级通用多智能体任务执行系统。**独立从零开发，按模块参考 DeerFlow 2.0，不 Fork 原仓库。**
 
-状态：**P01–P06 实际代码已在开发分支实现；P02–P06 仍为 PENDING_REVIEW，等待用户最终手动验收。P07 Deep Research 已完成详细设计与 A/B/C/D Codex 合同，当前仅 PLAN_READY、尚未编码或测试。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
+状态：**P01–P07 实际代码已在开发分支实现；P02–P07 仍为 PENDING_REVIEW，等待用户手动验收。P07 完成局部/Fake/浏览器与真实模型工具验证；本机未配置 Tavily Key，真实公网 Search/Extract 尚未验证。** 本仓库此前的 PaperWeave 设计已终止，旧文档仅可从 Git 历史中查阅。
 
 ## 要做成什么
 
@@ -43,7 +43,7 @@
 | [代码可读性与 Codex 规则](AGENTS.md) | 中文注释、复杂逻辑编号分段、只测本次变更、同步前端 |
 | [阶段进度记录](docs/progress/) | P00–P09 每阶段独立记录真实代码变更、局部测试、Commit 与审核结论 |
 
-**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次新增用户可见功能同步 Web 验证台。P02–P05 已有代码与局部验证记录，但用户最终手动验收状态不自动改变；P06 已按 A→B→C→D 实现并局部验证，等待用户手动验收。关键失败需停止，不自动进入 P07。
+**执行原则**：逐阶段落实并记录真实测试与 Git SHA；每次新增用户可见功能同步 Web 验证台。P02–P05 已有代码与局部验证记录，但用户最终手动验收状态不自动改变；P06 已按 A→B→C→D 实现并局部验证，等待用户手动验收。P07 已按正式合同完成，关键失败需停止，不自动进入 P08。
 
 ## P00 本地开发
 
@@ -420,14 +420,43 @@ uv run pytest -q tests/test_budget.py tests/test_usage.py tests/test_budget_demo
 所有Smoke使用独立8006/5176、临时两库/Workspace和合成文件，已关闭清理，未动用户.env和原服务。浏览器验证Usage、预览、取消中/终态、刷新/会话切换与下载；PyCharm GUI、其它OS、真实模型下再次委派child本轮未直接验证，child/MCP故障和恢复由Fake+真实Graph/SDK覆盖。P06为PENDING_REVIEW，等待用户手动Demo；不合并main、不进入P07。
 
 
-## P07 Deep Research（PLAN_READY，仅设计，尚未编码）
+## P07 Deep Research（PENDING_REVIEW）
 
-已在 `feat/p07-deep-research` 开发分支完成 [正式详细方案](docs/DEVELOPMENT.md)、[Codex P07-A/B/C/D 逐文件任务](docs/tasks/P07-ABCD.md)、[P07 进度](docs/progress/P07.md) 与架构更新。当前分支继承 P06 已实现代码，没有新增 P07 Research Service / Tavily Tool / 研究报告实际能力；**无 P07 pytest、Ruff或公网搜索联调通过记录**。
+[正式合同](docs/DEVELOPMENT.md) / [逐文件任务书](docs/tasks/P07-ABCD.md)；实现与逐项证据见 [P07进度](docs/progress/P07.md)。继续使用原Lead + Todo + Task + Tools + Skills，不引入独立研究Graph。
 
-最终用户链路：研究问题 → Lead按需制定Todo与读取`deep-research` Skill → `search_web`取得真实URL和业务SQLite证据ID → `fetch_webpage(evidence_id)` 通过Tavily Extract获取有界正文 → 仅被批准的ResearchChild并行研究 → Lead `save_research_report` 将真实证据ID转换成Markdown引文 → P03 Workspace登记报告 Artifact → React ResearchPanel显示来源等级和下载。
+- Lead可按需使用`search_web(query)`、`fetch_webpage(evidence_id)`、`list_evidence()`、`save_research_report(title,findings,limitations)`。只有本机配置Tavily后注册；无Key时保留原工具，并展示研究未配置。
+- HTTP仅连固定Tavily Search/Extract API，12秒/1MiB、禁环境代理/跳转/自动重试。不会从本机直接GET模型指定URL；来源只允许安全http(s)公网形式，拒绝私有IP、userinfo、非标准端口等。
+- 每Run最多6次Search、8次Extract、30条证据、1份报告；失败/未知调用同样占额。继续共享P06默认40模型/30工具/600秒、累计输入估算120000及上下文12k/18k预算。复杂研究可能因预算停止，应缩小范围或新建会话，不保证任意规模研究都能完成。
+- Research Child联网工具只读、仅同Run，General仍离线；Child不能写报告/文件、二次委派或使用Skills/MCP。父子调用只计一次。
+- `SNIPPET_ONLY`仅摘要；`EXTRACTION_FAILED`表示正文提取失败；`EXTRACTED`只代表Tavily取得有界正文（SQL最多20KiB，模型预览最多1500字符），**不代表事实已独立核真**。
+- 报告只接受结构化结论及当前Run真实Evidence IDs，服务器生成引文编号、来源/时间和局限，保存真实Markdown Artifact。网页文本不授予权限；前端只显示文本，不执行HTML/图片。报告写入后SQL关联失败保留Artifact并明确未知结果，不自动重写。
 
-安全选择：**默认不联网**，需要用户自行在本地配置`TAVILY_API_KEY`（不提交Git/不放给前端或模型）。只连接固定Tavily Search/Extract HTTPS API；绝不允许模型输入任意URL让本机发起HTTP抓取。搜索条目仅`SNIPPET_ONLY`、Provider有正文才`EXTRACTED`，不能将提取结果宣称为事实独立核验。每Run最多6个Search请求、8个Extract请求、30项来源、1份报告；P06父子共享用量/超时/取消规则继续有效。General仍离线，ResearchChild可用仅3个只读联网工具、无写文件/MCP/Skills/再次委派。没有Tavily Key仍能运行Fake Mock和所有P01–P06既有功能。
+启动与配置（在本机根`.env`自行填写可选`TAVILY_API_KEY`，本次未修改该文件）：
 
-P07依次实施 A Provider+Evidence+基础UI，B ResearchChild受控联网，C Skill+结构化引用+报告文件，D本地Fake/可用时真实网络与浏览器联调。**编码前必须先完成P07-0代码质量检查**：P06最新`f291af58`注释Commit存在已确认行尾空格和潜在Ruff格式问题；先用`git diff --check f291af58^ f291af58`核对旧提交历史问题（不以其通过为条件），然后运行Ruff、局部受影响pytest、前端build并最小修复；修复后用`git diff --check feat/p06-context-budget-cancel...HEAD`检查本分支新增变更，不重写旧业务。未过门槛不开始P07-A。
+```bash
+# 仓库根目录
+cd backend
+uv sync --locked --group dev
+uv run uvicorn minideerflow.main:app --host 127.0.0.1 --port 8000
+```
 
-本阶段代码完整交付后只能标`PENDING_REVIEW`，待用户亲自运行联网研究Demo；不能自动给P06或以前阶段写`ACCEPTED`，也不能自动进入P08。
+另开终端，在仓库根目录：
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+PyCharm继续使用`backend/.venv/bin/python`、`backend/src`为Sources Root，直接Run/Debug `backend/src/minideerflow/main.py`。配置改动后重启后端以清除Settings缓存；GUI断点本轮待人工确认。不要使用根目录的`.venv`替代后端环境。
+
+手动Demo：
+
+1. 无Key先新建会话普通问答/计算，确认联网研究显示未配置，旧能力保持；已有报告/来源仍可查。
+2. 配置Key并重启后，新建会话要求研究一个小范围主题并生成报告。观察真实ToolTrace、来源ID和提取等级；需要并行时要求两个research子任务，注意共享预算。
+3. 通过“查看报告/下载研究报告”核对来源URL、每条结论与原文是否相符；只有搜索摘要时不能称已精读正文。
+4. 研究执行中点击“取消运行”，观察“正在取消”到真实终态；刷新或重启后查询旧证据/报告。外部已发请求的费用/远端计算未必可撤销。
+
+本轮验证：最终局部 **380 passed，0 failed**（仅P07和直接受影响P01–P06接口），uv锁/安装/Ruff/前端build通过。Fake真实Graph完成Todo/Skill/Lead搜索/两个Child搜索提取/报告/重启；浏览器验证来源等级、取消、禁用状态、查看/下载及SHA一致。
+
+真实`deepseek-flash`工具调用另行成功：5次模型调用、5次工具，Provider输入11618/输出696 tokens、约7.55秒，1407-byte报告。**此模型测试的搜索提供方明确为Fake，不是公网研究。** 本机无Tavily Key，真实Search/Extract为`NOT_RUN_EXTERNAL_DEPENDENCY`；未查询模型账单金额或Tavily费用。用户提供配置后仍需手动核验真实公网来源。其它OS/PyCharm GUI/真实联网Research Child尚未验证；不进入P08。
