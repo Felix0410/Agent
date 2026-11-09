@@ -8,7 +8,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
-from minideerflow.agents.context import AgentRunContext
+from minideerflow.agents.context import AgentRunContext, ChildContext
 from minideerflow.runtime.budget import BudgetError
 from minideerflow.tools.registry import ToolPolicy, ToolPolicyError, ToolRegistry
 from minideerflow.workspace.service import WorkspaceService
@@ -25,7 +25,10 @@ class ToolGuardMiddleware(AgentMiddleware):
         tracker = getattr(request.runtime.context, "budget_tracker", None)
         if tracker is None:
             return await self._guard(request, handler)
-        reservation = await tracker.reserve("tool")
+        reservation = await tracker.reserve(
+            "tool",
+            source="child" if isinstance(request.runtime.context, ChildContext) else "parent",
+        )
         status = "error"
         try:
             result = await self._guard(request, handler)
@@ -54,7 +57,7 @@ class ToolGuardMiddleware(AgentMiddleware):
                 raise ToolPolicyError("TOOL_INVALID_ARGS")
             context = request.runtime.context
             if (
-                not isinstance(context, AgentRunContext)
+                not isinstance(context, (AgentRunContext, ChildContext))
                 or not isinstance(context.tool_policy, ToolPolicy)
                 or not isinstance(context.workspace_service, WorkspaceService)
             ):
@@ -63,6 +66,21 @@ class ToolGuardMiddleware(AgentMiddleware):
             if policy.run_id != context.run_id or policy.thread_id != context.thread_id:
                 raise ToolPolicyError("TOOL_NOT_ALLOWED")
             definition = self.registry.get(name)
+            # Child即便带伪造write Policy也不能获得写/编排/Skill/MCP权限。
+            if isinstance(context, ChildContext) and (
+                definition.permission != "read"
+                or definition.source != "builtin"
+                or name
+                not in {
+                    "calculate",
+                    "list_files",
+                    "read_text",
+                    "search_web",
+                    "fetch_webpage",
+                    "list_evidence",
+                }
+            ):
+                raise ToolPolicyError("TOOL_NOT_ALLOWED")
             if (
                 name not in policy.allowed_names
                 or definition.permission not in policy.allowed_permissions

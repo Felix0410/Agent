@@ -4,20 +4,33 @@ import asyncio
 from dataclasses import replace
 
 from minideerflow.agents.context import AgentRunContext, ChildContext
-from minideerflow.agents.subagents.config import SPECS
+from minideerflow.agents.subagents.config import ONLINE_RESEARCH, SPECS
 from minideerflow.agents.subagents.executor import execute_child
 from minideerflow.agents.subagents.models import TaskResult, TaskStatus
 from minideerflow.runtime.plan_repository import PlanError
 from minideerflow.runtime.plan_service import safe_emit
 from minideerflow.runtime.task_registry import TaskRegistry
-from minideerflow.tools.calculator import calculate
-from minideerflow.tools.file_tools import list_files, read_text
+from minideerflow.tools.registry import ToolPolicy, ToolRegistry, register_builtin_tools
 
 
 class TaskDispatcher:
     """子任务分发器"""
 
-    def __init__(self, repository, model_factory, registry=None, *, timeout=35, recursion_limit=14):
+    def __init__(
+        self,
+        repository,
+        model_factory,
+        registry=None,
+        *,
+        timeout=35,
+        recursion_limit=14,
+        tool_registry=None,
+    ):
+        if tool_registry is None:
+            tool_registry = ToolRegistry()
+            register_builtin_tools(tool_registry)
+            tool_registry.freeze()
+        self.tool_registry = tool_registry
         self.repository = repository
         self.model_factory = model_factory
         self.registry = registry or TaskRegistry()
@@ -79,18 +92,30 @@ class TaskDispatcher:
                     {"task_id": record.id, "agent_type": agent_type, "status": "RUNNING"},
                 )
                 # 5. 执行子任务
-                spec = replace(
-                    SPECS[agent_type], timeout=self.timeout, max_steps=self.recursion_limit
+                # 联网角色还必须与父Registry快照/授权交集，Prompt不能自行提权。
+                online = (
+                    context.research_service is not None
+                    and context.research_service.provider is not None
                 )
-                tools = [
-                    t
-                    for t in (calculate, list_files, read_text)
-                    if t.name in spec.allowed_tools and t.name in context.allowed_tools
-                ]
+                base = ONLINE_RESEARCH if agent_type == "research" and online else SPECS[agent_type]
+                spec = replace(base, timeout=self.timeout, max_steps=self.recursion_limit)
+                policy = ToolPolicy(
+                    context.run_id,
+                    context.thread_id,
+                    frozenset(spec.allowed_tools)
+                    & frozenset(context.allowed_tools)
+                    & self.tool_registry.names,
+                    frozenset({"read"}),
+                )
+                tools = self.tool_registry.list_allowed(policy)
                 child = ChildContext(
                     context.thread_id,
                     context.run_id,
                     context.workspace_service,
+                    research_service=context.research_service,
+                    tool_policy=policy,
+                    tool_registry=self.tool_registry,
+                    event_sink=context.event_sink,
                     budget_tracker=context.budget_tracker,
                     usage_recorder=context.usage_recorder,
                 )

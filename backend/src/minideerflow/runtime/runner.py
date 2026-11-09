@@ -236,6 +236,7 @@ class RunService:
                         self.task_registry,
                         timeout=self.settings.subagent_timeout_seconds,
                         recursion_limit=self.settings.subagent_recursion_limit,
+                        tool_registry=self.tool_registry,
                     )
                     # 配置工具策略
                     policy = ToolPolicy(

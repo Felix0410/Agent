@@ -22,6 +22,7 @@ export default function ResearchPanel({ runId, status, revision }: {
   const labels = { SNIPPET_ONLY: "仅搜索摘要，正文未核验", EXTRACTED: "Tavily已提取正文，事实仍待核验", EXTRACTION_FAILED: "正文提取失败，仅摘要线索" };
   return <section aria-label="联网研究">
     <h4>联网研究 · {evidence.length} 条证据</h4>
+    <p>Lead 与 Research 子任务共享本 Run 证据；General 保持离线，子任务只读。</p>
     {capability && !capability.enabled && <p>尚未配置 Tavily，联网研究不可用；已有证据仍可查询。</p>}
     {error && <p role="alert">{error}</p>}
     {evidence.map((item) => <details key={item.id}>

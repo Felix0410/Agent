@@ -25,5 +25,9 @@ class AgentRunContext(WorkspaceContext):
 class ChildContext(WorkspaceContext):
     """子agent运行上下文，包含工作空间上下文和子运行服务。"""
 
+    research_service: Any = None
+    tool_policy: Any = None
+    tool_registry: Any = None
+    event_sink: Any = None
     budget_tracker: Any = None
     usage_recorder: Any = None
