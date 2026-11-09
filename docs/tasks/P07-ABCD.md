@@ -5,7 +5,7 @@
 ## P07-0 · 代码质量与分支预检（在 A 之前）
 
 1. `git status -sb` / `git branch -vv` / `git log -6 --oneline` / `git fetch origin` 确认目标分支起于 P06 完整实现。不可删除用户改动、reset、force-push、自动合 main。
-2. 检查最新 P06 注释提交 `f291af58`：已观察到一处行尾空格、main.py import blank-line 排版变化，多个 `# noqa: BLE001` 消失。依次执行 `git diff --check HEAD~1 HEAD`、backend `uv run ruff check src tests examples`、`uv run ruff format --check src tests examples`、`uv lock --check` 和 frontend `npm run build`，仅修改格式/注释问题并在 P07 分支单独提交 `style: restore baseline formatting before P07`；**不能更改原本 Tool/Run 状态逻辑或擅自声称 P06 人工验收通过**。
+2. 检查最新 P06 注释提交 `f291af58`：已观察到一处行尾空格、main.py import blank-line 排版变化，多个 `# noqa: BLE001` 消失。用 `git diff --check f291af58^ f291af58` 审计 P06 历史注释提交（已知会报一处行尾空格，不能拿历史命令作为修复后必须为0的门槛）；再执行 backend `uv run ruff check src tests examples`、`uv run ruff format --check src tests examples`、`uv lock --check` 和 frontend `npm run build`，仅修改格式/注释问题，修复提交后 `git diff --check feat/p06-context-budget-cancel...HEAD` 检查本分支新增变更并在 P07 分支单独提交 `style: restore baseline formatting before P07`；**不能更改原本 Tool/Run 状态逻辑或擅自声称 P06 人工验收通过**。
 3. Codex 如不能保留原用户本地未提交修改，必须 STOP 并报告状态；若 P06 局部回归失败，先定位是否格式改动造成，不得绕过测试直接实现联网。
 4. 确认 `backend/src/minideerflow/{runtime/runner.py,agents/context.py,agents/subagents/{config,dispatcher,executor}.py,tools/{registry,executor}.py,skills/loader.py,workspace/service.py}` 的真实签名、原 P06 预算/取消/长结果和 ToolGuard Middleware 次序；子代理当前不能联网，这不是已实现的 P07 功能。
 
