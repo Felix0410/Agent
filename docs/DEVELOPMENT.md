@@ -1062,29 +1062,107 @@ P04 实际源码：`agents/lead.py:build_lead_agent(model, tools, checkpointer, 
 **参考**：DeerFlow v2.0.0 源码 `backend/packages/harness/deerflow/agents/middlewares/{summarization_middleware.py,tool_output_budget_middleware.py,loop_detection_middleware.py}` 和 `backend/packages/harness/deerflow/runtime/runs/{manager.py,worker.py}`；官方 [LangChain Middleware](https://docs.langchain.com/oss/python/langchain/middleware)、[短期记忆与状态](https://docs.langchain.com/oss/python/langchain/short-term-memory)。优先参考**当前锁版**的 API，与这些上游不同则实测后做最小兼容变更。
 
 
-### P07 — Deep Research 的完整业务实现
+### P07 — Deep Research：真实联网检索、来源证据与报告（2026-11-09 详细设计）
 
-**业务链**：用户给出研究题 → Lead 加载 `deep-research` Skill → Todo 分主题 → `search_web` 检索 → `fetch_webpage` 获取页面内容 → Sub-Agent 做独立分析 → `EvidenceStore` 汇总真实来源 → `ReportWriter` 输出 Markdown Artifact → 用户下载。**不重写一套固定 Deep Research Graph**，复用既有 Lead + Task + Tools + Skills。
+> **P07 状态：PLAN_READY；仅设计与任务合同，尚无 P07 代码/测试。** P06 的 Run/Context/Budget/Cancel 已推送远端，2026-11-09 最新注释优化 Commit `f291af58bfec249eeae55823739b7c12a47ab8bf` 已核实；P06 与 P02–P05 仍为 `PENDING_REVIEW`。P07 分支 `feat/p07-deep-research` 从该 P06 完整代码分支派生。**开始 P07 设计不代表 P06 手动验收通过；启动 Codex 编码前先完成 P07-0 基线质量检查**。实施合同：[P07-A/B/C/D 逐文件任务书](tasks/P07-ABCD.md)，真实结果只记 [P07 进度](progress/P07.md)。
 
-**联网供应商固定**：首选 **Tavily Search API** 作为单一搜索适配器；通过 `TAVILY_API_KEY` 环境变量配置，搜索结果必须携带真实 URL、标题、片段。若账户不可用，任务标记外部依赖阻塞并告知用户，不由 Codex 擅自扩展为多个搜索框架。网页正文抓取走受限 `httpx`，只允许 http/https，限制大小/时长/重定向，并显式防 SSRF（拒绝 loopback、私有、链路本地地址和 DNS 重绑定风险）。不必自行编写复杂浏览器自动化。
+#### 1. 本期到底要做什么（业务验收链）
 
-| 新增/修改文件 | 编码必须完成的具体内容 |
-| --- | --- |
-| `research/models.py` | `ResearchRequest(topic,scope?,report_format)`、`SearchHit(title,url,snippet,retrieved_at)`、`EvidenceRecord(id,url,excerpt,source_status)`、`ResearchReport(markdown,source_ids,artifact_id)`；来源未访问/抓取失败必须标注状态。 |
-| `research/search.py` | `TavilySearchProvider.search(query,max_results=5)`：调用当前 Tavily SDK/HTTP API，转换为 SearchHit；过滤空 URL、去重、限制单次结果数；保留查询与检索时间及错误类别。 |
-| `research/fetch.py` | `fetch_webpage(url)`：`httpx.AsyncClient` 有界超时、响应大小、Content-Type 与 SSRF/跳转检查；提取可阅读的网页文本并截断，不允许读取内网或本地文件。仅 HTTP 标题/摘要不足时明确“正文未核验”。 |
-| `research/evidence.py` | `EvidenceStore.add/list/get`：保存 search/fetch 工具真实返回的 URL、片段、检索时间、状态及来源 ID；相同 URL 规范化去重。严禁模型自己生成新的“已检索来源”ID。 |
-| `research/report.py` | `render_markdown_report(title,findings,evidence_ids,limitations)`：生成标题、研究方法、核心结论、对比、局限与来源清单；引用只能指向 EvidenceStore 中已经存在且满足引用条件的记录。将最终文本通过 P03 Workspace 保存为 Artifact。 |
-| `tools/research_tools.py` | `search_web`、`fetch_webpage`、`save_research_report` 包装上述服务，加入 Registry 并声明超时/权限；工具的大返回内容存 Artifact/证据而非无限推给模型。 |
-| `skills/public/deep-research/SKILL.md` | 明确输入、计划、分主题、搜索→核对、反向检索、合并、引用与停止标准；要求事实区分 verified/unverified，输出本项目支持的 Markdown 报告。 |
-| `frontend/src/components/ResearchReport.tsx` | 展示报告、来源链接、无法验证提示和下载按钮；复用 P02 流事件、P03 Artifact API。 |
-| `tests/test_research_search.py`、`test_research_evidence.py`、`test_research_report.py` | Mock 搜索结果转换、URL 去重、抓取失败、SSRF、虚假引用被拒绝、报告实际生成与 Artifact 下载。 |
+用户发起一个需要最新信息的研究问题（如“比较 LangGraph 和其他 Agent 编排方案的功能与边界，输出含参考资料的报告”） → Lead 根据复杂度调用 P04 `write_todos` → 读取 P05 `deep-research` Skill 的研究步骤 → 使用 **`search_web(query)`** 获取真实候选来源并给每个来源分配服务器生成的证据 ID → 使用 **`fetch_webpage(evidence_id)`** 取得有上限的网页正文，并明确区分“只有搜索摘要”和“已取得正文” → 有需要时委派 P04 `research` Sub-Agent 对子主题搜集和比较，子 Agent 仅返回 Findings、Evidence IDs、Missing → Lead 调用 **`save_research_report(title,findings,limitations)`**，服务器验证引用证据和来源状态、渲染 Markdown，经 P03 Workspace 写入真正的 Artifact → React `ResearchPanel` 显示来源/验证等级/报告下载；刷新、重启可查询同 Run 结果。
 
-**固定研究策略**：先由 Lead 评估问题范围，复杂任务创建 Todo；单个问题默认搜索不超过 5 条候选结果，每个 Run 总工具/Token/时间预算继承 P06；多个研究方向可由 P04 允许的 Research 子 Agent 并行检索；子 Agent 回传 **Findings + Evidence IDs + Missing** 而非全量网页文本。报告中没有真实证据的主张不得以确定性语气编成引用。只依靠搜索摘要的结论必须标记摘要级来源，不当作已精读正文。
+**简单问题不强制 Deep Research**。没有配置联网提供方时，既有 P01–P06 计算/文件/本地 Skills/MCP 功能仍可用，Research 服务的可用状态清楚显示“尚未配置”，模型不得声称在线搜索或引用“已访问网页”。P07 只实现真实**联网搜索、网页文本证据、研究报告**，不做 P08 PDF/RAG、浏览器自动化、学术全文/付费墙、图像视频、多供应商搜索/自动回退、不可信页面执行脚本或用户自动安装工具。
 
-**实现次序**：P07-A 搜索与抓取 → P07-B Evidence/引文 ID → P07-C Research Skill + 子任务报告 → P07-D UI 和一个真实网络 Smoke。测试只跑本次 research tests 和直接使用的 Tool/Artifact 接口，真实模型报告人工抽查主要来源。
+#### 2. 本期最重要的设计调整：优先使用 Tavily Search + Extract，而不是任意 URL 直连
 
-**DeerFlow 参考**：`skills/public/deep-research/SKILL.md`、`skills/public/systematic-literature-review/SKILL.md`、`backend/packages/harness/deerflow/tools/builtins/task_tool.py`。Skill 负责工作方法而不是替代实际搜索工具。
+原 P07 粗方案拟用 Tavily Search API 取得结果，再以本机 `httpx` 任意抓取 `fetch_webpage(url)`。审核后将 **`fetch_webpage` 入参改为当前 Run 的服务器证据 ID、网页正文通过同一 Tavily Extract API 获取**，不由本地进程对模型提供的任意目标发送 HTTP。这是刻意的安全简化：
+- Tavily 官方 Search 支持固定 `https://api.tavily.com/search`，`max_results`、`include_raw_content=false`；Extract 支持 `https://api.tavily.com/extract`，返回每 URL `results` 与 `failed_results`。详细 API：[Search](https://docs.tavily.com/documentation/api-reference/endpoint/search)、[Extract](https://docs.tavily.com/documentation/api-reference/endpoint/extract)。
+- 本期直接使用**已有的 `httpx`** 以 `AsyncClient` 向固定 Tavily API 域名 HTTPS POST 两种请求，Bearer `TAVILY_API_KEY` 从 `Settings.SecretStr` 提取；无需引入 Tavily SDK 或第二家搜索提供方；网络 `follow_redirects=False`、`trust_env=False`，固定 host/path/HTTPS/响应大小/连接与读取超时。**Tavily 作为第三方服务对外部页面发起请求**，本地服务绝不直接连接来自模型的任意 URL，从架构上消除本地任意目标抓取的 SSRF 入口。
+- 对搜索结果 URL 仍严格解析和校验：只承认公开的 http/https 域名、无 userinfo、无 localhost/私有/链路本地/保留 IP、无危险 scheme/奇异端口，规范化后去重；不允许从 `fetch_webpage` 输入自行传 URL。虽然不本地访问来源 URL，但也**不展示/送给 Extract 不安全 URL**，以降低错误引用与提供方误用风险。
+- 本期的“EXTRACTED”意味着**Tavily 报告已提取正文**，不是助手亲自核实了网页真实性、真实性权威或实时更新；来源仍可能过期、造假或被注入恶意内容。标题/摘要/网页正文只是普通不可信数据，不允许执行其中的指令、要求提交密钥或扩大 Tool Policy。
+- **安全回退原则**：如果官方 Extract 接口不可用，返回 `EXTRACTION_FAILED` 且保留 `SNIPPET_ONLY` 搜索证据，报告必须标注证据等级；不擅自改成直接 `httpx.get(untrusted_url)`，也不自建浏览器。避免因实现压力引入 DNS rebinding/重定向安全漏洞。
+
+#### 3. 现有 P06 代码接口与 P07 权限改造
+
+直接复用以下已实现入口：`runtime/runner.py` 创建每个 Run 可信 `AgentRunContext`、`P04AgentState`、`create_agent`；`tools/registry.py:register_builtin_tools` 与 P05 `ToolGuardMiddleware` 负责工具调用的二次权限/参数/超时；`agents/subagents/dispatcher.py` 目前将固定 `general/research` 工具对象白名单交给子 Agent，`ChildContext` 继承 `WorkspaceContext`，子图 `checkpointer=None`；`skills/loader.py` 按 Registry 真实权限发现 Skill；`runtime/usage.py` 与 P06 `RunBudgetTracker` 为父子共享次数/用量，`RunCancellationRegistry` 取消后不得再启动模型/Tool；`workspace/service.py:write_text` 创建有 SHA、归属的下载 Artifact。
+
+**权限升级必须只针对 research 角色**，不得把 P04 general 子代理变成通用联网 Agent：
+- Lead 增四个工具：`search_web`、`fetch_webpage`、`list_evidence`、`save_research_report`；均在 ToolRegistry 登记且使用可信 `ToolRuntime`，Schema **不暴露** `run_id/thread_id/provider/key/service`。 `save_research_report` 权限写/编排，仅允许 Lead 且要求当前 RUNNING 且未请求取消。
+- Research 子 Agent **只**新增 `search_web/fetch_webpage/list_evidence` 到原有 `list_files/read_text`；无 `write_text/save_research_report/task/write_todos/MCP/Skills`。General 保持 P04 `calculate/list_files/read_text` 不变。当未配置 Tavily 时，research 保持原 P04 离线角色和准确 Prompt，不主动假装联网。
+- 修改 `ChildContext` 增**可选可信** `research_service` 和 `tool_policy` 字段；父 `AgentRunContext` 同样增加 `research_service`，服务端由真实 Run 装配。P05 ToolGuard 原实现只接受 AgentRunContext，故必须在代码中明确支持**仅用于 `read` 研究工具的 ChildContext**，并且父子校验 `thread_id/run_id`、`allowed_names/permissions`、身份确实 RUNNING；不可简单跳过守卫，否则模型 JSON 可绕过 Tool Policy。Child 启用 P05 Guard 后**替换而非叠加** P06 `ChildToolBudgetMiddleware` 以防工具次数重复入账；保持 Child 的 `UsageBudgetMiddleware` 与 `ToolOutputBudgetMiddleware`，不同角色的 Tool Schema 确实不同。
+- `ToolRegistry` 在应用 lifespan 内按顺序：P05 原内置 → 配置时 Research Tool（若无密钥则 capability 标记 unavailable，不给模型工具）→ P05 已批准本地 MCP → P05 Skill Tool → freeze → 创建 SkillCatalog。研究工具服务的 Provider/API key 从不暴露给前端或提示词。**不重建第二个 Agent 主循环或固定 Deep Research StateGraph**。
+- P06 上限保留：父 Run600s、模型40次/工具30次共享、TaskRegistry总4次/最大3并发、每 child35s/图步14；研究调用有更紧的**按 Run SQL 上限**：`search_web` 最多6次，`fetch_webpage` 最多8次，每次最多5 SearchHit，一 Run 最多30证据条目，研究报告最多1份。计数按**发起尝试**、含失败、并发 SQL 原子预扣；这不是替代 P06 预算而是叠加的外部 API/成本保护。
+- API Provider 实际单次耗时：Search/Extract 各最多12秒，不做隐式重试；ToolRegistry 为 Search/Fetch 单次配置15s，Child35s总超时仍生效，P06取消传播到父子，运行结束/重启不重发可能已计费的请求。用户需知 Tavily 搜索/正文提取可能另有独立提供方费用，**本期不虚构提供方计费金额**；P06 UsagePanel 仍只统计模型 provider usage。
+
+#### 4. EvidenceStore：一切引用以服务器持久记录为准
+
+新增业务 SQLite 表（使用 P06 `RuntimeDatabase.init_schema` **幂等增表，不改变既有表 CHECK/Run/Thread**）：
+- `research_requests(id TEXT PRIMARY KEY,run_id TEXT,kind TEXT CHECK(kind IN('SEARCH','EXTRACT')),status TEXT,created_at TEXT,finished_at TEXT)`，索引 Run+kind；用于网络调用次数的 SQL 原子占额，`PENDING` 在重启后 `UNKNOWN`，不自动重发。
+- `research_evidence(id TEXT PRIMARY KEY,run_id TEXT REFERENCES runs(id),thread_id TEXT REFERENCES threads(id),canonical_url TEXT,title TEXT,snippet TEXT,extract_text TEXT NULL,status TEXT CHECK(status IN('SNIPPET_ONLY','EXTRACTED','EXTRACTION_FAILED')),searched_at TEXT,extracted_at TEXT NULL,content_sha256 TEXT NULL,UNIQUE(run_id,canonical_url))`；内容字段最多**20 KiB UTF-8**、标题最多200、Snippet最多500；按 Run+时间排序。读/更改证据必须验证真实 Thread/Run，不能跨 Run 复用 ID。对相同 URL 合并不无限追加；更新为 EXTRACTED 只接受真实 Provider Extract response，并在同事务校验请求/Run 归属；失败不会伪造成功。
+- `research_reports(id TEXT PRIMARY KEY,run_id TEXT UNIQUE REFERENCES runs(id),thread_id TEXT,artifact_id TEXT REFERENCES artifacts(id),created_at TEXT)`，只记录**真实已登记 Artifact** 的结果；如果 Workspace 成功但登记报告关系失败，保留原 Artifact 并明确失败/不可自动重放，不声称报告已经完成。
+
+**结构化对象**：`SearchHit(evidence_id,title,url,snippet,status,searched_at)`；`EvidenceRecord(...,source_status,excerpt,content_sha256?)`；`ResearchFinding(claim,evidence_ids)`；`ResearchReport(artifact_id,title,citations,limitations)`。Evidence ID 由服务器 UUID 生成，显示用稳定 `[1] [2]` 脚注号根据证据排序；不能用模型手写 URL/引文编号充当查询证据。
+
+**必须验证的引用语义**：
+- `search_web` 真正请求 Tavily 并在 SQLite 成功登记 SearchHit 后才给模型返回 ID；失败返回稳定 `RESEARCH_PROVIDER_UNAVAILABLE/RATE_LIMITED/SEARCH_FAILED`，不返回伪结果。
+- `fetch_webpage(evidence_id)` 仅接收同 Run 搜索结果生成的 ID，从数据库取 canonical_url 发 Tavily Extract；结果/failed_results逐条核对 URL，才将状态置 EXTRACTED/EXTRACTION_FAILED。正文只暴露简短预览(≤1500字符)给模型，完整有界文本留业务库；不允许直接 fetch 任意 URL，也不承诺付费墙/JS网页一定可读取。
+- `list_evidence()` 输出当前 Run 的 ID、title、canonical URL、状态和简短摘要，不暴露跨Run/原始大正文。失败/缺失证据也保留可信状态。
+- `save_research_report(title,findings:[{claim,evidence_ids}],limitations)` 先根据数据库验证每个 Evidence ID 属于本 Run，至少1个真实来源；已 EXTRACTED 给出“正文来源”，SNIPPET_ONLY 或 EXTRACTION_FAILED 只能以**“仅摘要线索/正文抓取失败”**标注，不得在渲染器自动提升为全文支持。模型没有提供 evidence_id 的主张必须列在“尚待核验”而非伪加引用。渲染器决定 Markdown 引文与完整来源列表，不相信模型 Markdown 中的 `[1]` 或手工 URL；并明确“来源存在不等于其主张真实性已独立验证”。
+- 来源 URL/网页文字可含恶意 prompt injection；工具返回给模型时采用普通 ToolMessage，不插入 System Prompt。只用可信数据库来源 ID 渲染最终引用；前端 React 不以 `dangerouslySetInnerHTML` 输出外部正文，不自动请求内网 URL、源站 favicon 或任意图片；外部链接需 `target="_blank" rel="noopener noreferrer"`。
+
+#### 5. API、前端与用户可见状态
+
+新增只读 `api/research.py`：
+| 方法/路径 | 返回 | 失败边界 |
+|---|---|---|
+| `GET /api/research/status` | `{enabled,provider:"tavily"|null,status}` | 只报告是否配置；不返回 key/账单 |
+| `GET /api/runs/{run_id}/research/evidence` | `EvidenceRecord[]`（标题、URL、状态、摘录、时间、ID） | 未知 Run404；没有研究证据[] |
+| `GET /api/runs/{run_id}/research/report` | `ResearchReportDto|null` | 未知 Run404；无报告 null；链接必须指向已登记 Artifact |
+
+不开放前端直接 POST provider search、fetch 或 report；研究行为由可信 Run 的真实 Tool Calling 引发。P02 EventBus 新增 `research_search_completed`、`research_evidence_updated`、`research_report_created` 事件，仅 ID/标题/状态/Artifact ID，**不携带正文/密钥**；数据库提交后发事件，SSE 缺口/重启靠 HTTP 查询真实历史。
+
+React 新增 `frontend/src/components/ResearchPanel.tsx` 和 `frontend/src/api/research.ts`；当前 Run/历史 Run 显示联网状态、证据条数、来源 title/URL、SNIPPET_ONLY/EXTRACTED/FAILED 中文区别、报告链接和下载（复用 P03 已有 Artifact 下载 API）。P04 Todo/Task、P06 Usage 与 Cancel、P05 CapabilityPanel 在每阶段仍必须可用；P07-A 完成后研究状态和搜索证据就能单独在前端测试，B/C/D 逐步增强，不允许“最后再一起补 UI”。
+
+#### 6. Codex 精确文件责任
+
+| 文件 | 责任（不重新设计） |
+|---|---|
+| `backend/src/minideerflow/research/models.py` | SearchHit/EvidenceRecord/ResearchFinding/ResearchReport 等强类型模型与大小限制；source_status 明确 |
+| `backend/src/minideerflow/research/provider.py` | TavilyProvider 固定 HTTPS POST Search/Extract、SecretStr、不重试、12s上限、JSON规范转换、出错脱敏；现有 httpx 无需添加 Tavily SDK |
+| `backend/src/minideerflow/research/urls.py` | search URL 验证/规范化/公开域名判断，拒绝 DNS/IP/奇异端口/私有来源；**只对 Tavily API 发起 HTTP** |
+| `backend/src/minideerflow/research/repository.py` | 同一 SQLite `RuntimeDatabase` 实现 6 search/8 extract 配额、最多30条 evidence、事务归属/URL 去重、真实状态、重启 orphan、报告关联 |
+| `backend/src/minideerflow/research/service.py` | Search/Extract/Evidence/Report 主业务协调，失败保留状态、Run/Thread授权、DB提交后轻量SSE，取消/预算统一 |
+| `backend/src/minideerflow/research/report.py` | 结构化 findings 与服务端真实 evidence ID 做 Markdown 引文、方法/时间/不足，调用 P03 Workspace write_text 写唯一报告 Artifact |
+| `backend/src/minideerflow/tools/research_tools.py` | search_web/fetch_webpage/list_evidence/save_research_report 四个真正 ToolRuntime工具，模型只能传业务参数 |
+| `backend/src/minideerflow/runtime/db.py` | 新增 research_requests/research_evidence/research_reports 三张表/必要索引，仅增量兼容 |
+| `backend/src/minideerflow/agents/context.py` | 父和 child 可选 research_service；child 可信只读 policy，保留当前 P03 WorkspaceContext/P06 shared tracker |
+| `backend/src/minideerflow/tools/executor.py` | ToolGuard 安全识别 ChildContext，**只允许 read 研究工具**、真实同Run身份、父子不双计数；P05原Command/ToolTrace/权限全部回归 |
+| `backend/src/minideerflow/agents/subagents/config.py` / `dispatcher.py` / `executor.py` | research role 仅在配置可用时新增 3 个只读web research工具，其它角色/ChildCheckpointer None不变；child使用 Guard 替代重复Tool计数Middleware |
+| `backend/src/minideerflow/agents/lead.py` / `runtime/runner.py` | 现有图使用 Registry中的四个研究工具，注入可信Service/Role；仅必要的短Prompt引导，P06预算/取消保持 |
+| `backend/src/minideerflow/main.py` / `config.py` / `.env.example` | 可选 TAVILY_API_KEY SecretStr, lifespan建ResearchRepo/Service，ToolRegistry在freeze前注册，SkillCatalog后创建，HTTP路由 |
+| `backend/skills/public/deep-research/SKILL.md` | 正式场景：明确是否需要实时资料→Todo→多角度search→提取正文/交叉核验→证据等级→局限→最终报告。required_tools 是真实已注册工具名，不提权 |
+| `backend/src/minideerflow/api/research.py` | 三个只读 HTTP，未知Run404、密钥不出服务端、report关联真实Artifact |
+| `frontend/src/api/research.ts` / `components/ResearchPanel.tsx` / `components/ChatPanel.tsx` / `components/RunStatus.tsx` / `App.tsx` / `styles.css` | 研究证据与报告的实时/历史面板；断线GET补齐与P06 cancel正常 |
+| `backend/tests/test_research_provider.py` / `test_research_urls.py` / `test_research_repository.py` / `test_research_tools.py` / `test_research_report.py` / `test_research_demo.py` | HTTP Fake transport、恶意URL、SQL并发额度、真实ToolRuntime、Child权限、引用合法性、完整Artifact/HTTP/SSE/刷新 |
+| `README.md` / `docs/progress/P07.md` / `docs/tasks/P07-ABCD.md` / `docs/ARCHITECTURE.md` | 完整A–D责任、局部真实测试、用户Demo/Tavily配置、文档链接与实际Git SHA |
+
+#### 7. A/B/C/D 分解（每项单独提交、更新前端）
+
+**P07-0 · 开始编码前的质量门槛**：先根据 `feat/p06-context-budget-cancel` 现有 HEAD 检查 `git status -sb`、`git diff --check HEAD~1 HEAD`、`uv run ruff check src tests examples`、`uv run ruff format --check src tests examples`、P06 必要回归与 React build。最新 P06“注释优化”Commit 已确认至少一处行尾空格，并变更了 `main.py` 导入格式、去除部分 `noqa`；**目前不能声称这些检查已通过**。如果失败，仅单独提交**最小格式/注释修正**，记录在 P07 progress，严禁借机改 P06 业务逻辑或虚构 P06 人工验收。检查通过后开始 A，未通过就停下报告。Git 远端提交历史本身正常，不必重写 Git 配置、强推或合并 main。
+
+**P07-A · Provider/搜索/取文/证据初版**：建研究模型/URL规则/TavilyProvider/SQL请求额度及EvidenceStore、search_web/fetch_webpage/list_evidence真实 ToolRuntime及Guard，Lead可搜索；增加只读 GET research/status/evidence 与 ResearchPanel 最小列表。Fake+MockTransport 不使用 Tavily Key：验证真实Schema、Search API转换、Extract结果/failed_results、同Run归属、6/8/30 SQL原子配额、链接校验、缺Key降级、Provider 超时与取消。每项测试后前端可见实际来源/状态；提交 A SHA。
+
+**P07-B · 研究子代理有界联网/并发**：只为 research 角色添加 3 个研究只读工具，child 创建时用服务端白名单/ToolPolicy Guard，继承P06 Tracker，替换重复的 ChildToolBudgetMiddleware；General保持离线，Child无save/report/write/task。Fake 真实 ToolNode + two agents 并行访问同Run EvidenceStore、断网/失败/超时/取消和SQL配额，P04 Task/SSE/Checkpoint/ToolTrace 全部保持；ResearchPanel显示child写入的真实证据，提交 B SHA。
+
+**P07-C · Deep Research Skill、结构化引用与报告**：版本管理 Skill，研究规划使用 P04 Todos；新增 `save_research_report`、证据核验、Markdown renderer和ResearchReport SQL真实Artifact，至少1条有效Run证据，引用可区分EXTRACTED与SNIPPET_ONLY，无法验证主张写入局限；没有已登记录或只有伪造ID的输入拒绝。前端可查看真实报告和下载，不注入 HTML；测试内容注入/交叉Run/非正常重试/Artifact双库边界和未知回执，提交 C SHA。
+
+**P07-D · Fake/真实网络/浏览器/故障综合验收**：用户请求→Todo/Skills→Lead搜索→Research Child搜索/Extract→Evidence持久化→报告Markdown Artifact→下载/刷新/重启、P06 Usage与Cancel、P05 MCP off仍用builtin。Fake 全链路为必需；真实 Tavily key已配置时只用一个合成主题进行**少量真实 Search/Extract**并记录真实 URL/Provider响应/费用额度未知；没有 Key 应标真实网络 Smoke 未执行、P07外部依赖待配置，不能把Fake标成公网可用。真实 ChatModel若可用再独立Smoke，模型可能自主不调用工具必须如实记录。局部 pytest（仅P07及直接消费者）/Ruff/uv lock/npm build和Web人工演示材料，D独立提交，最终 P07 标 `PENDING_REVIEW`，不自动启动 P08。
+
+#### 8. 硬性停止与验收标准
+
+- 模型能任意指定 URL 让本地 httpx 直连；Research 子 Agent 获得写文件/委派/Skills/MCP 权限；Child ToolGuard与 P06 ChildToolBudget重复计数；权限或同Run证据隔离被绕过；从错误/搜索摘要假装已取得全文；Report可凭空引用不存在ID；未获已登记Artifact却返回成功；网页 prompt injection 被当系统指令；取消后继续发新Provider请求；SQL并发超配额；P06数据/Checkpoint/取消/用量受破坏——任意一项需 STOP 并报告复现，不得降级安全要求。
+- Demo 验收以**真实网络请求/数据库证据状态/Report Artifact/下载字节/Run ToolTrace**为准，模型口头说“我已搜索/已读页面”不算。不能因为没有 Tavily key 就临时开放公网 MCP、任意 Shell 或本地不受控抓取。
+- 参考：[DeerFlow v2.0.0 deep-research SKILL](https://github.com/bytedance/deer-flow/blob/v2.0.0/skills/public/deep-research/SKILL.md)、[Tavily Search](https://docs.tavily.com/documentation/api-reference/endpoint/search)、[Tavily Extract](https://docs.tavily.com/documentation/api-reference/endpoint/extract)、[OWASP SSRF Prevention](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)；API具体字段和异常类型由 Codex 以锁版 `httpx` + 实际 Tavily官方响应/Mock实测为准。
+
 
 ### P08 — Docling + Chroma 多文档 RAG
 
