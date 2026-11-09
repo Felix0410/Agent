@@ -1,11 +1,14 @@
 """研究工具只接受业务参数；身份、Provider及凭据由ToolRuntime注入。"""
 
 import json
+from typing import Annotated
 
 from langchain.tools import ToolRuntime, tool
+from pydantic import Field
 
 from minideerflow.agents.context import AgentRunContext, ChildContext
-from minideerflow.research.models import ResearchError
+from minideerflow.research.models import ResearchError, ResearchFinding
+from minideerflow.research.report import ReportInput
 from minideerflow.research.service import ResearchService
 from minideerflow.runtime.budget import BudgetError
 from minideerflow.tools.registry import ToolDefinition, ToolPolicy
@@ -68,12 +71,41 @@ async def list_evidence(runtime: ToolRuntime[WorkspaceContext]) -> str:
     )
 
 
+@tool
+async def save_research_report(
+    title: Annotated[str, Field(min_length=1, max_length=120)],
+    findings: Annotated[list[ResearchFinding], Field(min_length=1, max_length=12)],
+    limitations: Annotated[list[str], Field(max_length=8)],
+    runtime: ToolRuntime[WorkspaceContext],
+) -> str:
+    """Lead only: save one Markdown research report from structured claims and existing evidence IDs in this run. Server generates citations; snippets are not verified full text. No raw Markdown or arbitrary paths. Never retry unknown writes."""
+
+    async def save(context):
+        if (
+            not isinstance(context, AgentRunContext)
+            or "write" not in context.tool_policy.allowed_permissions
+        ):
+            raise ResearchError("RESEARCH_NOT_ALLOWED")
+        data = ReportInput(title=title, findings=findings, limitations=limitations)
+        return await context.research_service.save_report(context, data)
+
+    return await _invoke(runtime, "save_research_report", save)
+
+
 def register_research_tools(registry, enabled):
     """未配置时只显示不可用状态，不把工具暴露给模型。"""
     if not enabled:
         registry.mark_unavailable("research", "tavily", "RESEARCH_UNAVAILABLE", source="builtin")
         return
-    for scoped in (search_web, fetch_webpage, list_evidence):
+    for scoped in (search_web, fetch_webpage, list_evidence, save_research_report):
         registry.register(
-            ToolDefinition(scoped.name, scoped, "builtin", "read", 15, "tavily", scoped.description)
+            ToolDefinition(
+                scoped.name,
+                scoped,
+                "builtin",
+                "write" if scoped.name == "save_research_report" else "read",
+                30 if scoped.name == "save_research_report" else 15,
+                "tavily",
+                scoped.description,
+            )
         )

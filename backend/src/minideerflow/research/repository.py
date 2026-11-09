@@ -152,3 +152,63 @@ class ResearchRepository:
                 "UPDATE research_requests SET status='UNKNOWN',finished_at=?,error_code='RESEARCH_INTERRUPTED' WHERE status='PENDING'",
                 (now(),),
             )
+
+    async def check_report_absent(self, run_id, thread_id):
+        """已有关联或遗留报告Artifact时拒绝重写；不自动重放未知写操作。"""
+        async with self.database.transaction() as conn:
+            await self._identity(conn, run_id, thread_id, active=True)
+            async with conn.execute(
+                "SELECT 1 FROM research_reports WHERE run_id=? UNION ALL SELECT 1 FROM files WHERE run_id=? AND kind='ARTIFACT' AND display_name GLOB 'research-report-*.md' LIMIT 1",
+                (run_id, run_id),
+            ) as cur:
+                if await cur.fetchone():
+                    raise ResearchError("RESEARCH_REPORT_EXISTS_OR_UNKNOWN")
+
+    async def link_report(self, run_id, thread_id, artifact_id, data, citations):
+        """关联只能指向已经登记且同Run/Thread的Artifact，不假设跨文件/SQL事务。"""
+        import json
+
+        async with self.database.transaction() as conn:
+            await self._identity(conn, run_id, thread_id, active=True)
+            async with conn.execute(
+                "SELECT 1 FROM artifacts WHERE id=? AND run_id=? AND thread_id=?",
+                (artifact_id, run_id, thread_id),
+            ) as cur:
+                if await cur.fetchone() is None:
+                    raise ResearchError("RESEARCH_ARTIFACT_NOT_FOUND")
+            await conn.execute(
+                "INSERT INTO research_reports VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    str(uuid4()),
+                    run_id,
+                    thread_id,
+                    artifact_id,
+                    data.title,
+                    json.dumps(data.limitations, ensure_ascii=False),
+                    json.dumps([item.id for item in citations]),
+                    now(),
+                ),
+            )
+
+    async def get_report(self, run_id, thread_id):
+        import json
+
+        from minideerflow.research.models import ResearchReport
+
+        async with self.database.transaction() as conn:
+            await self._identity(conn, run_id, thread_id)
+            async with conn.execute(
+                "SELECT r.* FROM research_reports r JOIN artifacts a ON a.id=r.artifact_id AND a.run_id=r.run_id AND a.thread_id=r.thread_id WHERE r.run_id=? AND r.thread_id=?",
+                (run_id, thread_id),
+            ) as cur:
+                row = await cur.fetchone()
+        if row is None:
+            return None
+        ids = set(json.loads(row["evidence_ids_json"]))
+        citations = [item for item in await self.list(run_id, thread_id) if item.id in ids]
+        return ResearchReport(
+            artifact_id=row["artifact_id"],
+            title=row["title"],
+            citations=citations,
+            limitations=json.loads(row["limitations_json"]),
+        )

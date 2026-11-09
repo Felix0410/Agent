@@ -13,3 +13,12 @@ export type Evidence = {
 export const getResearchStatus = (): Promise<ResearchStatus> => request("/api/research/status");
 export const getEvidence = (runId: string): Promise<Evidence[]> =>
   request(`/api/runs/${encodeURIComponent(runId)}/research/evidence`);
+
+export type ResearchReport = {
+  artifact_id: string;
+  title: string;
+  citations: Evidence[];
+  limitations: string[];
+};
+export const getReport = (runId: string): Promise<ResearchReport | null> =>
+  request(`/api/runs/${encodeURIComponent(runId)}/research/report`);

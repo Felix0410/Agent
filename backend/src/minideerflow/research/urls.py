@@ -10,7 +10,11 @@ from minideerflow.research.models import ResearchError
 def canonical_url(value: str) -> str:
     """只保留正常公网http(s)地址；同URL片段不产生新证据。"""
     try:
-        if not isinstance(value, str) or len(value) > 2048 or re.search(r"[\s\\\x00-\x1f]", value):
+        if (
+            not isinstance(value, str)
+            or len(value) > 2048
+            or re.search(r'[\s\\\x00-\x1f<>"`]', value)
+        ):
             raise ValueError
         parsed = urlsplit(value)
         host = (parsed.hostname or "").rstrip(".").encode("idna").decode().lower()

@@ -32,8 +32,8 @@ async def evidence(run_id: str, request: Request):
 @router.get("/runs/{run_id}/research/report")
 async def report(run_id: str, request: Request):
     try:
-        await request.app.state.repository.get_run(run_id)
-        return None
+        run = await request.app.state.repository.get_run(run_id)
+        return await request.app.state.research.repository.get_report(run_id, run.thread_id)
     except RepositoryError:
         return JSONResponse(
             status_code=404, content={"code": "RUN_NOT_FOUND", "message": "Run not found"}

@@ -112,3 +112,5 @@ article {
 /* P03 文件信息不显示宿主机路径，长文件名/ID 在窄屏折行。 */
 [aria-label="会话文件"] li { overflow-wrap: anywhere; margin: 12px 0; }
 [aria-label="会话文件"] button { margin-right: 8px; }
+
+.research-markdown { white-space: pre-wrap; overflow-wrap: anywhere; }
