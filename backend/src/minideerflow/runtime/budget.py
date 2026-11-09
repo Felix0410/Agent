@@ -17,6 +17,8 @@ class BudgetError(Exception):
 
 @dataclass(frozen=True)
 class RunBudget:
+    """单次Run的预算"""
+
     max_model_calls: int = 40
     max_tool_calls: int = 30
     max_seconds: float = 600
@@ -24,7 +26,7 @@ class RunBudget:
 
 
 def estimate_messages(messages):
-    """UTF8字节+结构开销的保守确定性估算，不宣称精确tokenizer。"""
+    """估算消息列表的token数"""
     return sum(
         len(
             json.dumps(
@@ -39,7 +41,7 @@ def estimate_messages(messages):
 
 
 def estimate_tools(tools):
-    """公开工具Schema也属于实际模型输入，不能漏出上下文预算之外。"""
+    """估算工具列表的token数"""
     total = 0
     for tool in tools:
         if isinstance(tool, dict):
@@ -56,7 +58,7 @@ def estimate_tools(tools):
 
 
 class RunBudgetTracker:
-    """锁覆盖父/子/摘要预留；取消和耗尽为不可逆信号。"""
+    """单次Run的预算跟踪器"""
 
     def __init__(self, run_id, budget, repository, event_sink=None):
         self.run_id = run_id
@@ -80,7 +82,7 @@ class RunBudgetTracker:
         await self.repository.start(self.run_id, asdict(self.budget))
 
     async def check(self):
-        """每次操作前确认取消；SQL检查由C接入，防止已提交取消后新增调用。"""
+        """检查状态"""
         if self.cancel_check is not None and await self.cancel_check():
             self.cancelled.set()
         if self.cancelled.is_set():
@@ -90,8 +92,8 @@ class RunBudgetTracker:
             raise BudgetError()
 
     async def reserve(self, kind, estimate=0, source="parent"):
-        """1. 共享锁核验；2. 原子预扣；3. 保存唯一调用尝试。"""
-        # 1. 父子共享同一锁，检查取消/时限后才允许扣除次数。
+        """预扣预算"""
+        # 1. 父子共享同一锁，同一预算
         async with self.lock:
             await self.check()
             if (
@@ -120,7 +122,7 @@ class RunBudgetTracker:
             return call, time.monotonic()
 
     async def finish(self, reservation, status, usage=None):
-        """即使重复取消也等待最终用量提交，随后继续传播取消。"""
+        """完成预扣"""
         task = asyncio.create_task(self._finish(reservation, status, usage))
         interrupted = False
         while not task.done():
