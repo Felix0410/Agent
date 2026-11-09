@@ -77,7 +77,7 @@ class WorkspaceService:
                 return
             logger.error("Workspace registration state unavailable during cleanup")
             return
-        except Exception:
+        except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
             logger.error("Workspace registration state unavailable during cleanup")
             return
         # 2. 检查文件位置是否一致
@@ -90,7 +90,7 @@ class WorkspaceService:
                 # 5. 文件类型一致，删除已登记文件以及新文件流
                 await self.repository.discard_upload(registered)
                 self.storage.discard_new(stored)
-            except Exception:
+            except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
                 logger.error("Workspace upload compensation failed")
 
     async def list_files(self, thread_id: str) -> list[FileRecord]:
@@ -107,13 +107,14 @@ class WorkspaceService:
         except asyncio.CancelledError:
             try:
                 await task
-            except Exception:
+            except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
                 logger.error("Workspace read cancelled during cleanup")
             raise
 
     async def read_text(self, thread_id: str, file_id: str) -> str:
         """读取指定Thread下的指定文件的文本内容。"""
         from minideerflow.workspace.models import READ_LIMIT
+
         # 1. 获取文件元数据
         record = await self.repository.get_file_for_thread(thread_id, file_id)
         # 2. 检查文件类型

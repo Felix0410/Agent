@@ -23,6 +23,7 @@ async def _drain(tasks):
 @dataclass
 class _RunTasks:
     """子任务状态"""
+
     semaphore: asyncio.Semaphore  # 并发信号量
     calls: int = 0  # 已调用次数
     closing: bool = False

@@ -47,7 +47,7 @@ async def list_files(runtime: ToolRuntime[WorkspaceContext]) -> str:
         )
     except WorkspaceError as exc:
         return _error(exc)
-    except Exception:
+    except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
         return "ERROR[WORKSPACE_UNAVAILABLE]: File operation failed"
 
 
@@ -59,7 +59,7 @@ async def read_text(file_id: str, runtime: ToolRuntime[WorkspaceContext]) -> str
         return await context.workspace_service.read_text(context.thread_id, file_id)
     except WorkspaceError as exc:
         return _error(exc)
-    except Exception:
+    except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
         return "ERROR[WORKSPACE_UNAVAILABLE]: File operation failed"
 
 
@@ -82,7 +82,7 @@ async def write_text(filename: str, content: str, runtime: ToolRuntime[Workspace
         )
     except WorkspaceError as exc:
         return _error(exc)
-    except Exception:  
+    except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
         return "ERROR[WORKSPACE_UNAVAILABLE]: File operation failed"
 
 

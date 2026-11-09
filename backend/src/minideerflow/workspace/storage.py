@@ -133,10 +133,12 @@ class WorkspaceStorage:
 
     async def save_upload_stream(self, thread_id: str, upload, name: str, mime: str) -> StoredFile:
         """保存上传流"""
+
         # 1. 分块读取上传流
         async def chunks() -> AsyncIterator[bytes]:
             while chunk := await upload.read(CHUNK_SIZE):
                 yield chunk
+
         # 2. 验证文件大小
         limit = PDF_UPLOAD_LIMIT if mime == "application/pdf" else TEXT_UPLOAD_LIMIT
         # 3. 保存文件流

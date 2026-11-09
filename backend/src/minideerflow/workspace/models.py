@@ -33,12 +33,14 @@ class WorkspaceError(Exception):
 
 class FileKind(str, Enum):
     """文件类型"""
+
     UPLOAD = "UPLOAD"
     ARTIFACT = "ARTIFACT"
 
 
 class FileRecord(BaseModel):
     """文件记录，包含文件元数据和存储键。"""
+
     id: str
     thread_id: str
     display_name: str
@@ -53,6 +55,7 @@ class FileRecord(BaseModel):
 
 class ArtifactRecord(BaseModel):
     """Agent生成文件记录"""
+
     artifact_id: str
     file_id: str
     display_name: str
@@ -61,6 +64,7 @@ class ArtifactRecord(BaseModel):
     run_id: str
     created_at: str
     thread_id: str = Field(exclude=True)
+
 
 # dataclass自动生成 __init__ 方法，frozen=True 表示字段不可变
 @dataclass(frozen=True)
@@ -73,7 +77,7 @@ class WorkspaceContext:
 
 
 def validate_uuid(value: str) -> str:
-    """验证 UUID """
+    """验证 UUID"""
     try:
         if str(UUID(value)) == value:
             return value

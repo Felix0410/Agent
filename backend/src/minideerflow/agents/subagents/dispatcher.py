@@ -127,7 +127,7 @@ class TaskDispatcher:
                     )
                     cleanup = asyncio.create_task(self._finish(context, result))
                     await asyncio.shield(cleanup)
-            except Exception:
+            except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
                 import logging
 
                 logging.getLogger("minideerflow").error("Subtask cleanup unavailable")

@@ -1,8 +1,11 @@
 """FastAPI 应用与 SQLite 资源生命周期；保留 P01 调试入口。"""
+
 import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+
 from fastapi import FastAPI
+
 from minideerflow.api.capabilities import router as capabilities_router
 from minideerflow.api.demo import router
 from minideerflow.api.files import router as files_router

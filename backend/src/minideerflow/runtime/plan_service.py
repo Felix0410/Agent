@@ -13,7 +13,7 @@ async def safe_emit(context, kind: str, payload: dict) -> None:
     if context.event_sink is not None:
         try:
             await context.event_sink(kind, payload)
-        except Exception:
+        except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
             logging.getLogger("minideerflow").warning("Plan event unavailable")
 
 

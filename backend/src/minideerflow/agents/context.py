@@ -9,6 +9,7 @@ from minideerflow.workspace.models import WorkspaceContext
 @dataclass(frozen=True)
 class AgentRunContext(WorkspaceContext):
     """智能运行上下文，包含工作空间上下文和智能体服务。"""
+
     todo_service: Any
     event_sink: Any = None
     task_dispatcher: Any = None

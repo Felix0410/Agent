@@ -108,7 +108,7 @@ async def register_mcp_tools(registry, path):
     """注册MCP Server上的所有工具"""
     try:
         settings = load_mcp_settings(path)
-    except Exception:
+    except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
         registry.mark_unavailable("mcp_configuration", "configuration", "MCP_INVALID_CONFIG")
         return
     for server in settings.servers:
@@ -141,7 +141,7 @@ async def register_mcp_tools(registry, path):
                 registry.register(definition)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
             if isinstance(exc, ToolPolicyError):
                 code = exc.code
             for approved in server.tools:

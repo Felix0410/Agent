@@ -39,10 +39,12 @@ async def stream_agent(
     indexed: dict[str, BaseMessage] = {}
     calls: dict[str, dict] = {}
     completed: set[str] = set()
+
     # 4. 定义事件发射函数，用于向外部发送模型文本和工具调用。
     async def emit(kind: str, payload: dict[str, Any]) -> None:
         if event_sink is not None:
             await event_sink(kind, payload)
+
     # 5. 执行智能体，开始流式输出。
     if on_graph_start is not None:
         on_graph_start()
@@ -57,14 +59,14 @@ async def stream_agent(
             # 拆分实际数据和元数据
             chunk, metadata = data
             if (
-                isinstance(chunk, (AIMessage, AIMessageChunk))  #确保是模型文本消息
-                and metadata.get("langgraph_node") == "model"   #确保消息来源是模型节点
-                and chunk.id                                    #确保消息ID有效
+                isinstance(chunk, (AIMessage, AIMessageChunk))  # 确保是模型文本消息
+                and metadata.get("langgraph_node") == "model"  # 确保消息来源是模型节点
+                and chunk.id  # 确保消息ID有效
                 and chunk.id not in old_ids
-                and not chunk.tool_calls                        #确保不包含工具调用
+                and not chunk.tool_calls  # 确保不包含工具调用
                 and not getattr(chunk, "tool_call_chunks", [])
                 and not chunk.invalid_tool_calls
-                and chunk.text                                  #确保消息文本有效
+                and chunk.text  # 确保消息文本有效
             ):
                 await emit("assistant_delta", {"message_id": chunk.id, "text": chunk.text})
             continue

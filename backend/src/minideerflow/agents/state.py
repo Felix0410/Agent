@@ -21,6 +21,7 @@ class TodoItem(TodoInput):
 
 class P04AgentState(AgentState):
     """父图结构化计划状态"""
+
     # 继承默认字段 messages: list[BaseMessage]
     todos: NotRequired[list[dict]]
     context_summary: NotRequired[str]

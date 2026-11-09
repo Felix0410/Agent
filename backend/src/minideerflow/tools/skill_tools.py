@@ -33,7 +33,7 @@ async def list_skills(runtime: ToolRuntime[AgentRunContext]) -> str:
         return json.dumps(
             context.skill_service.list_skills(context.tool_policy), ensure_ascii=False
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
         return "ERROR[SKILL_NOT_ALLOWED]: Skill listing unavailable"
 
 
@@ -51,7 +51,7 @@ async def read_skill(name: str, runtime: ToolRuntime[AgentRunContext]) -> str:
             },
             ensure_ascii=False,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
         code = exc.code if isinstance(exc, SkillError) else "SKILL_UNAVAILABLE"
         return f"ERROR[{code}]: Skill reading unavailable"
 

@@ -48,8 +48,8 @@ def validate_message(message: str) -> str:
 
 def extract_run_tool_traces(messages: list[BaseMessage]) -> list[ToolTrace]:
     """从消息中提取工具调用轨迹"""
-    pending = {} # 暂存未匹配的调用ID
-    seen = set() # 已见的调用ID
+    pending = {}  # 暂存未匹配的调用ID
+    seen = set()  # 已见的调用ID
     traces = []  # 工具调用轨迹
     for item in messages:
         # 1. 检查是否为 AIMessage

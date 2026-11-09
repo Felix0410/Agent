@@ -118,7 +118,7 @@ class RunService:
             except ModelNotConfigured:
                 raise
             # 处理其他异常
-            except Exception:
+            except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
                 raise AgentExecutionError(
                     "MODEL_UPSTREAM_ERROR", "Model configuration failed"
                 ) from None
@@ -172,7 +172,7 @@ class RunService:
                 await self._fail_run(run_id, "RUN_INTERRUPTED", False)
                 raise
             # 处理其他异常
-            except Exception:
+            except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
                 logger.error("Run worker failed (run_id=%s)", run_id)
             finally:
                 # 5. 任务完成，从队列中移除
@@ -430,7 +430,7 @@ class RunService:
             # 5. 关闭事件通道
             if self.events is not None:
                 await self.events.close_run(run_id)
-        except Exception:
+        except Exception:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
             logger.error("Run failure persistence failed (run_id=%s)", run_id)
 
     async def _emit(self, run_id: str, kind: str, payload: dict) -> None:

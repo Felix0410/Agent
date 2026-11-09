@@ -23,10 +23,10 @@ class EventStreamError(Exception):
 class Subscription:
     """事件订阅"""
 
-    initial: deque[RunEvent] # 初始事件队列
-    queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=64)) # 实时事件队列
-    gap: RunEvent | None = None # 流 gap 事件
-    closed: bool = False # 是否已关闭
+    initial: deque[RunEvent]  # 初始事件队列
+    queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=64))  # 实时事件队列
+    gap: RunEvent | None = None  # 流 gap 事件
+    closed: bool = False  # 是否已关闭
 
     async def next_event(self) -> RunEvent:
         """获取下一个事件"""
@@ -60,6 +60,7 @@ class Subscription:
 @dataclass
 class _RunBuffer:
     """Run 事件缓冲区"""
+
     thread_id: str
     events: deque[RunEvent] = field(default_factory=lambda: deque(maxlen=512))
     sequence: int = 0

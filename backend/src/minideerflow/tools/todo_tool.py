@@ -38,7 +38,7 @@ async def write_todos(
                 ],
             }
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 边界统一脱敏，保持取消和既有失败语义
         code = exc.code if isinstance(exc, PlanError) else "TODO_UNAVAILABLE"
         # 4. 失败时添加一条错误消息
         return Command(
