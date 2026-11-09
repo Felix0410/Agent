@@ -428,6 +428,6 @@ uv run pytest -q tests/test_budget.py tests/test_usage.py tests/test_budget_demo
 
 安全选择：**默认不联网**，需要用户自行在本地配置`TAVILY_API_KEY`（不提交Git/不放给前端或模型）。只连接固定Tavily Search/Extract HTTPS API；绝不允许模型输入任意URL让本机发起HTTP抓取。搜索条目仅`SNIPPET_ONLY`、Provider有正文才`EXTRACTED`，不能将提取结果宣称为事实独立核验。每Run最多6个Search请求、8个Extract请求、30项来源、1份报告；P06父子共享用量/超时/取消规则继续有效。General仍离线，ResearchChild可用仅3个只读联网工具、无写文件/MCP/Skills/再次委派。没有Tavily Key仍能运行Fake Mock和所有P01–P06既有功能。
 
-P07依次实施 A Provider+Evidence+基础UI，B ResearchChild受控联网，C Skill+结构化引用+报告文件，D本地Fake/可用时真实网络与浏览器联调。**编码前必须先完成P07-0代码质量检查**：P06最新`f291af58`注释Commit存在已确认行尾空格和潜在Ruff格式问题；检查`git diff --check HEAD~1 HEAD`、Ruff、局部受影响pytest、前端build，仅最小修复格式，不重写旧业务。未过门槛不开始P07-A。
+P07依次实施 A Provider+Evidence+基础UI，B ResearchChild受控联网，C Skill+结构化引用+报告文件，D本地Fake/可用时真实网络与浏览器联调。**编码前必须先完成P07-0代码质量检查**：P06最新`f291af58`注释Commit存在已确认行尾空格和潜在Ruff格式问题；先用`git diff --check f291af58^ f291af58`核对旧提交历史问题（不以其通过为条件），然后运行Ruff、局部受影响pytest、前端build并最小修复；修复后用`git diff --check feat/p06-context-budget-cancel...HEAD`检查本分支新增变更，不重写旧业务。未过门槛不开始P07-A。
 
 本阶段代码完整交付后只能标`PENDING_REVIEW`，待用户亲自运行联网研究Demo；不能自动给P06或以前阶段写`ACCEPTED`，也不能自动进入P08。
