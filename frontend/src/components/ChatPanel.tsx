@@ -116,6 +116,9 @@ export default function ChatPanel({
         if (event.type === "run_cancel_requested") void poll();
         if (
           [
+            "research_search_completed",
+            "research_evidence_updated",
+            "research_report_created",
             "budget_updated",
             "context_compacted",
             "tool_output_externalized",

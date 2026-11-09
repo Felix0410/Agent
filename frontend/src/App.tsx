@@ -217,7 +217,7 @@ export default function App() {
       <footer>
         当前已实现：P00 健康 / P01 单轮 Agent 与计算 / P02 会话记忆 / 后台 Run /
         SSE。P03 上传 / 文件工具 / Artifact。P04 Todo / 只读子代理委派（research
-        无联网）。P05 工具目录 / 本机 MCP / 按需 Skills。P06 共享预算 / 自动摘要
+        无联网）。P05 工具目录 / 本机 MCP / 按需 Skills。P07 共享预算 / 自动摘要
         / 主动取消。
       </footer>
     </main>

@@ -9,10 +9,14 @@ from fastapi import FastAPI
 from minideerflow.api.capabilities import router as capabilities_router
 from minideerflow.api.demo import router
 from minideerflow.api.files import router as files_router
+from minideerflow.api.research import router as research_router
 from minideerflow.api.runs import router as runs_router
 from minideerflow.api.tasks import router as tasks_router
 from minideerflow.api.threads import router as threads_router
 from minideerflow.config import get_settings
+from minideerflow.research.provider import TavilyProvider
+from minideerflow.research.repository import ResearchRepository
+from minideerflow.research.service import ResearchService
 from minideerflow.runtime.checkpoints import open_checkpointer
 from minideerflow.runtime.db import RuntimeDatabase
 from minideerflow.runtime.events import EventBus
@@ -24,6 +28,7 @@ from minideerflow.runtime.task_registry import TaskRegistry
 from minideerflow.skills.loader import SkillCatalog
 from minideerflow.tools.mcp_adapter import register_mcp_tools
 from minideerflow.tools.registry import ToolRegistry, register_builtin_tools
+from minideerflow.tools.research_tools import register_research_tools
 from minideerflow.tools.skill_tools import register_skill_tools
 from minideerflow.workspace.repository import WorkspaceRepository
 from minideerflow.workspace.service import WorkspaceService
@@ -71,6 +76,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 9. 初始化工具注册器
         tool_registry = ToolRegistry()
         register_builtin_tools(tool_registry)
+        # 研究服务只连固定Tavily API；无Key保持旧能力且不注册联网工具。
+        research_repository = ResearchRepository(database)
+        await research_repository.reconcile_orphans()
+        key = settings.tavily_api_key
+        provider = TavilyProvider(key) if key and key.get_secret_value().strip() else None
+        app.state.research = ResearchService(research_repository, provider, app.state.workspace)
+        register_research_tools(tool_registry, provider is not None)
         # 10. 初始化 MCP 工具注册器
         await register_mcp_tools(tool_registry, settings.mcp_config_path)
         # 11. 初始化技能工具注册器
@@ -89,6 +101,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             task_registry=registry,
             tool_registry=tool_registry,
             skill_service=app.state.skill_service,
+            research_service=app.state.research,
         )
         # 13. 启动运行服务
         runner.start()
@@ -107,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(files_router)
     app.include_router(tasks_router)
     app.include_router(capabilities_router)
+    app.include_router(research_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

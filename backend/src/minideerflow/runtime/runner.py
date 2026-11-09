@@ -63,6 +63,7 @@ class RunService:
         task_registry: TaskRegistry | None = None,
         tool_registry: ToolRegistry | None = None,
         skill_service=None,
+        research_service=None,
     ) -> None:
         self.task_registry = task_registry or TaskRegistry(
             settings.max_subagent_concurrency, settings.max_subagent_calls_per_run
@@ -73,6 +74,7 @@ class RunService:
             tool_registry.freeze()
         self.usage = UsageRepository(repository.database)
         self.cancellation = RunCancellationRegistry(repository)
+        self.research_service = research_service
         self.skill_service = skill_service
         self.tool_registry = tool_registry
         self.plans = plans
@@ -255,6 +257,7 @@ class RunService:
                         allowed_tools=tuple(t.name for t in tools),
                         tool_policy=policy,
                         skill_service=self.skill_service,
+                        research_service=self.research_service,
                         budget_tracker=tracker,
                         usage_recorder=self.usage,
                     )

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     app_env: Literal["development", "test", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    tavily_api_key: SecretStr | None = None
     mcp_config_path: Path | None = None
     model_name: str | None = None
     model_api_key: SecretStr | None = None

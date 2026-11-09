@@ -88,6 +88,30 @@ CREATE TABLE IF NOT EXISTS usage_calls (
     provider_output_tokens INTEGER, elapsed_ms INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_usage_run ON usage_calls(run_id,invocation_id);
+CREATE TABLE IF NOT EXISTS research_requests (
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id),
+ kind TEXT NOT NULL CHECK(kind IN ('SEARCH','EXTRACT')), query TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('PENDING','SUCCEEDED','FAILED','UNKNOWN')),
+ error_code TEXT, created_at TEXT NOT NULL, finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_research_requests ON research_requests(run_id,kind);
+CREATE TABLE IF NOT EXISTS research_evidence (
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id),
+ thread_id TEXT NOT NULL REFERENCES threads(id), canonical_url TEXT NOT NULL,
+ title TEXT NOT NULL CHECK(length(title)<=200), snippet TEXT NOT NULL CHECK(length(snippet)<=500),
+ extract_text TEXT CHECK(length(CAST(extract_text AS BLOB))<=20480),
+ status TEXT NOT NULL CHECK(status IN ('SNIPPET_ONLY','EXTRACTED','EXTRACTION_FAILED')),
+ searched_at TEXT NOT NULL, extracted_at TEXT, content_sha256 TEXT,
+ UNIQUE(run_id,canonical_url)
+);
+CREATE INDEX IF NOT EXISTS ix_research_evidence ON research_evidence(run_id,searched_at,id);
+CREATE TABLE IF NOT EXISTS research_reports (
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE REFERENCES runs(id),
+ thread_id TEXT NOT NULL REFERENCES threads(id), artifact_id TEXT NOT NULL REFERENCES artifacts(id),
+ title TEXT NOT NULL, limitations_json TEXT NOT NULL, evidence_ids_json TEXT NOT NULL,
+ created_at TEXT NOT NULL
+);
+
 """
 
 

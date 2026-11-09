@@ -1,3 +1,4 @@
+import ResearchPanel from "./ResearchPanel";
 import UsagePanel from "./UsagePanel";
 import TaskPanel from "./TaskPanel";
 import TodoPanel from "./TodoPanel";
@@ -57,6 +58,7 @@ export default function RunStatus({
           部分已启动操作结果未知，请检查已登记产物或外部系统；不会自动重试。
         </p>
       )}
+      <ResearchPanel runId={run.id} status={run.status} revision={planRevision} />
       <UsagePanel
         runId={run.id}
         status={run.status}

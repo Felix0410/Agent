@@ -16,6 +16,7 @@ class AgentRunContext(WorkspaceContext):
     allowed_tools: tuple[str, ...] = ("calculate", "list_files", "read_text", "write_text")
     tool_policy: Any = None
     skill_service: Any = None
+    research_service: Any = None
     budget_tracker: Any = None
     usage_recorder: Any = None
 
