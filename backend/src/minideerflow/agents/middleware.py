@@ -3,7 +3,9 @@
 import asyncio
 
 from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import ToolMessage
 
+from minideerflow.agents.service import ToolTrace
 from minideerflow.runtime.budget import budget_breakdown
 
 
@@ -66,6 +68,27 @@ class ToolUsageMiddleware(AgentMiddleware):
             return result
         finally:
             await tracker.finish(reserved, status)
+
+
+class ToolTraceObserver(AgentMiddleware):
+    """Child无持久流：旁路保留已完成回执，官方摘要不能抹去真实失败或来源。"""
+
+    def __init__(self, traces):
+        self.traces = traces
+
+    async def awrap_tool_call(self, request, handler):
+        result = await handler(request)
+        if isinstance(result, ToolMessage):
+            text = result.content if isinstance(result.content, str) else str(result.content)
+            self.traces.append(
+                ToolTrace(
+                    name=request.tool_call["name"],
+                    args=request.tool_call["args"],
+                    result=text,
+                    ok=result.status != "error" and not text.startswith("ERROR["),
+                )
+            )
+        return result
 
 
 # 旧内部导入名仅用于兼容，已弃用其预算语义，生产装配使用新名称。

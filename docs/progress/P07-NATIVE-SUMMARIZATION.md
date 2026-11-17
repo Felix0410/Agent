@@ -17,3 +17,14 @@
 - 显式废弃旧.env限额配置，Pydantic extra=ignore兼容旧条目；未修改用户密钥。45次并发模型/35工具、900000字节真实登记且不被旧上限拒绝；大System/Schema只作脱敏观察。UI新Run不再展示最大次数/字节额度，历史Run注明仅历史诊断，Provider真实Token仍显示。
 - 局部命令：pytest tests/test_usage_observation.py tests/test_budget.py tests/test_usage.py tests/test_budget_demo.py::test_real_model_hook_usage_and_child_shared tests/test_budget_demo.py::test_legacy_call_limit_no_longer_blocks_second_model tests/test_cancel_recovery.py tests/test_subagents.py tests/test_research_tools.py tests/test_research_child.py tests/test_config.py：**60 passed in8.02s**；Ruff check/format通过本次Python文件，npm run build通过43 modules。
 - 原自研分区测试将在R2随生产旧文件删除改为官方机制测试，不用旧“必须预算失败”的断言误验新行为；本阶段尚未声称多轮摘要修复完成。
+
+## R2 · 官方自动摘要接入
+
+- 直接装配锁版SummarizationMiddleware的薄子类ObservedSummarizationMiddleware，调用super().abefore_model，不重写分区/cutoff/裁剪/滚动算法。使用公开summarizer=同配置BaseChatModel浅副本，加TAG_NOSTREAM与AsyncCallbackHandler逐次记录真实摘要尝试，保留官方只读摘要重试/ContextOverflow处理；没有改框架私有Runnable。
+- 与DeerFlow v2差异及证据：原版额外Skill救援/记忆flush本项目不需要；本锁版公开summarizer允许更薄接线。唯一额外账务适配是取消时等待框架shield回调完成；实际取消测试最初观察到PENDING晚收尾，现用同一回调锁确保终态发布前UNKNOWN入账。Child用旁路ToolTraceObserver保留已完成回执，避免原生摘要后丢失先前失败和file_id；不参与分区、不重放工具、不提升权限。
+- 删除生产context_manager.py和其旧6条保护/字节估算框架，移除对应实现型测试，替换为真实Graph/Checkpoint/流式/配对测试。旧context_summary字段及旧Human锚点仍可读，测试证明不清库、Todo保留、新问题继续工作；摘要内容不成为assistant_delta/final/ToolTrace。
+- 新配置：SUMMARIZATION_ENABLED=true、TRIGGER_TOKENS=6000、TRIGGER_MESSAGES=24、KEEP_MESSAGES=8、TRIM_TOKENS=4000。未知模型用官方近似Token/消息数OR触发，非精确窗口；已确认MODEL_CONTEXT_WINDOW_TOKENS只收紧摘要trigger/trim。父/Child同策略，保留600s/35s和图递归约束。
+- 新Run日志/Usage记录近似Token前后、消息数、摘要耗时与source，不记录正文；Provider/历史v1/v2仍独立，UI不展示新Run“最大字节额度”。MODEL_CONTEXT_WINDOW_EXCEEDED / SUMMARY_FAILED / AGENT_RECURSION_LIMIT区分真实原因，不伪报本地预算。
+- 本地.env仅移除三个旧字节执行配置，添加上述5项摘要参数，原有摘要自定义值/凭据均保留。未配置或猜测真实模型窗口；配置改动后需重启用户后端，新轮不占用8000影响PyCharm。
+- 局部：pytest tests/test_native_summarization.py tests/test_context_research_flow.py tests/test_config.py tests/test_research_demo.py tests/test_research_child.py tests/test_budget_demo.py tests/test_context_estimator.py tests/test_usage_observation.py tests/test_budget.py tests/test_usage.py tests/test_subagents.py tests/test_cancel_recovery.py：**66 passed in10.32s**；Ruff与format通过修改Python文件；npm run build通过43 modules。空摘要/取消失败不替换旧Checkpoint；摘要与父各7/2合成usage只记一次；真实模型窗口异常/循环异常HTTP分类通过。
+- P07研究全链默认/低触发均完成报告、两Child、15证据；逐个检验模型实际收到的ToolCall/ToolMessage成对。原始用户输入保留业务Run，Graph内容由官方摘要管理，不再强行保留原Human全文。真实模型/连续15问/跨进程重启证据在R3单列。

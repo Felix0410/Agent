@@ -5,7 +5,6 @@ import json
 import logging
 import time
 from dataclasses import asdict, dataclass
-from typing import Protocol
 from uuid import uuid4
 
 from minideerflow.runtime.usage import UsageCall
@@ -40,31 +39,6 @@ class BudgetBreakdown:
     hard_bytes: int
     cumulative_bytes: int
     estimator: str = "utf8_json_bytes_v1"
-
-
-@dataclass(frozen=True)
-class ContextEstimate:
-    """一次请求的统一结果；预估与真实Provider Token没有互相覆盖关系。"""
-
-    breakdown: BudgetBreakdown
-    estimated_tokens: int
-    unit: str = "estimated_tokens_v2"
-    estimator_version: str = "utf8_conservative_v2"
-
-
-class ContextEstimator(Protocol):
-    """计数策略只接收本次实际消息和公开Schema，不依赖模型名称猜窗口。"""
-
-    def estimate(self, messages, tools=(), system_message=None, **limits) -> ContextEstimate: ...
-
-
-class ConservativeContextEstimator:
-    """未知兼容模型使用每UTF-8代理字节一Token的保守预估，不宣称精确计数。"""
-
-    def estimate(self, messages, tools=(), system_message=None, **limits):
-        breakdown = budget_breakdown(messages, tools, system_message, **limits)
-        # 继续保留字节硬保护；不采用英文常见的4字节/Token换算去放行中文或长JSON。
-        return ContextEstimate(breakdown, breakdown.total_bytes)
 
 
 def budget_breakdown(
@@ -127,11 +101,7 @@ class RunBudgetTracker:
         self.cancelled = asyncio.Event()
         self.outcome_unknown = False
         self.cancel_check = None
-        self.context_soft_limit = 24000
-        self.context_hard_limit = 48000
-        self.estimator: ContextEstimator = ConservativeContextEstimator()
-        self.model_context_window_tokens = None
-        self.model_output_reserve_tokens = 2048
+        self.summary_config = {}
 
     async def initialize(self):
         await self.repository.start(
@@ -141,12 +111,9 @@ class RunBudgetTracker:
                 "execution_limits": False,
                 "max_seconds": self.budget.max_seconds,
                 "estimate_unit": "utf8_json_bytes_v1",
+                "summarization": self.summary_config,
             },
         )
-
-    async def reserve_context(self, estimate, source="parent"):
-        """弃用适配：旧调用方仍可记录字节诊断，但窗口/累计值不再拦截执行。"""
-        return await self.reserve("model", estimate.breakdown.total_bytes, source)
 
     async def record_context(self, breakdown, reason="WITHIN_LIMIT"):
         """SQL保存最后一次分项，日志只记录数值和固定原因枚举。"""

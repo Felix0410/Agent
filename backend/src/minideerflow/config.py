@@ -35,9 +35,14 @@ class Settings(BaseSettings):
     run_queue_size: int = Field(default=8, ge=1, le=8)
     # P06 持久Run最长600秒，与前端720秒轮询配套；P01单轮仍为45秒。
     run_timeout_seconds: float = Field(default=600, gt=0, le=600)
-    # 只有用户确认模型窗口后才配置；未知窗口继续执行字节硬保护。
+    # 未知窗口不猜模型规格；官方近似Token/消息数只触发摘要，不作为执行许可。
+    summarization_enabled: bool = True
+    summarization_trigger_tokens: int = Field(default=6000, ge=128, le=1000000)
+    summarization_trigger_messages: int = Field(default=24, ge=3, le=1000)
+    summarization_keep_messages: int = Field(default=8, ge=2, le=100)
+    summarization_trim_tokens: int = Field(default=4000, ge=128, le=1000000)
+    # 已确认的窗口仅用于更早触发摘要，不作为本地执行许可。
     model_context_window_tokens: int | None = Field(default=None, ge=128, le=2000000)
-    model_output_reserve_tokens: int = Field(default=2048, ge=1, le=128000)
     subagent_timeout_seconds: float = Field(default=35, gt=0, le=35)
     subagent_recursion_limit: int = Field(default=14, ge=2, le=14)
     max_subagent_concurrency: int = Field(default=3, ge=1, le=3)
@@ -64,11 +69,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def separate_database_files(self) -> "Settings":
         """业务库与 Graph 库必须分开，不能误认为两者有原子事务。"""
-        if (
-            self.model_context_window_tokens is not None
-            and self.model_output_reserve_tokens >= self.model_context_window_tokens
-        ):
-            raise ValueError("output reserve must be less than model context window")
+        if self.summarization_trigger_messages <= self.summarization_keep_messages:
+            raise ValueError("summary message trigger must exceed retained messages")
         if self.runtime_db_path == self.checkpoint_db_path:
             raise ValueError("runtime and checkpoint databases must use separate files")
         if any(

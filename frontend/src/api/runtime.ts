@@ -211,6 +211,24 @@ export type RunUsage = {
   estimated_v2_calls: number;
   estimator_version: string | null;
   estimated_token_unit: string;
+  summary_calls: number;
+  summary_settings: {
+    enabled?: boolean;
+    trigger_tokens?: number;
+    trigger_messages?: number;
+    keep_messages?: number;
+    trim_tokens?: number;
+    estimate_unit?: string;
+    confirmed_model_window?: number | null;
+  };
+  summary_diagnostic: {
+    old_message_count: number;
+    new_message_count: number;
+    estimated_before: number;
+    estimated_after: number;
+    elapsed_ms: number;
+    estimate_unit: string;
+  } | null;
   estimate_unit: string;
   context_breakdown: {
     system_bytes: number;

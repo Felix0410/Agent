@@ -3,28 +3,47 @@
 import asyncio
 
 from langchain.agents import create_agent
+from langchain_core.exceptions import ContextOverflowError
+from langgraph.errors import GraphRecursionError
 from openai import APIError, APITimeoutError
 
 from minideerflow.agents.context import ChildContext
-from minideerflow.agents.middleware import ModelUsageMiddleware, ToolUsageMiddleware
-from minideerflow.agents.service import extract_final_answer, extract_run_tool_traces
+from minideerflow.agents.middleware import (
+    ModelUsageMiddleware,
+    ToolTraceObserver,
+    ToolUsageMiddleware,
+)
+from minideerflow.agents.service import extract_final_answer
 from minideerflow.agents.subagents.models import TaskResult, TaskStatus
+from minideerflow.agents.summarization import SummarizationError, summarization_middleware
+from minideerflow.config import get_settings
 from minideerflow.runtime.budget import BudgetError
 from minideerflow.tools.executor import ToolGuardMiddleware
 from minideerflow.tools.output_budget import ToolOutputBudgetMiddleware
 
 
 async def execute_child(
-    spec, description: str, child_context: ChildContext, model_factory, tools: list, task_id: str
+    spec,
+    description: str,
+    child_context: ChildContext,
+    model_factory,
+    tools: list,
+    task_id: str,
+    *,
+    settings=None,
 ) -> TaskResult:
     """执行子任务"""
     try:
         # 1. 创建子任务Agent
+        model = model_factory()
+        traces = []
         agent = create_agent(
-            model_factory(),
+            model,
             tools,
             checkpointer=None,
             middleware=[
+                ToolTraceObserver(traces),
+                *summarization_middleware(model, settings or get_settings(), source="child"),
                 ModelUsageMiddleware("child"),
                 # 新可信Child使用Guard统一计数；旧直接调用接口保留原路径，不叠加。
                 ToolGuardMiddleware(child_context.tool_registry)
@@ -44,7 +63,6 @@ async def execute_child(
             )
         # 3. 提取子任务结果
         messages = state["messages"]
-        traces = extract_run_tool_traces(messages)
         answer = extract_final_answer(messages)
         if any(not trace.ok for trace in traces):
             return TaskResult(
@@ -67,6 +85,20 @@ async def execute_child(
             summary=answer[:1600],
             truncated=len(answer) > 1600,
             source_file_ids=sources,
+        )
+    except SummarizationError:
+        return TaskResult(
+            task_id=task_id, status=TaskStatus.FAILED, error_code="SUBTASK_SUMMARY_FAILED"
+        )
+    except ContextOverflowError:
+        return TaskResult(
+            task_id=task_id,
+            status=TaskStatus.FAILED,
+            error_code="SUBTASK_MODEL_CONTEXT_WINDOW_EXCEEDED",
+        )
+    except GraphRecursionError:
+        return TaskResult(
+            task_id=task_id, status=TaskStatus.FAILED, error_code="SUBTASK_RECURSION_LIMIT"
         )
     except BudgetError:
         raise

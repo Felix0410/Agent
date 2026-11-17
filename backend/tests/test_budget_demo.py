@@ -103,8 +103,8 @@ def test_nine_rounds_long_file_compaction_and_reopen(monkeypatch):
 
     from minideerflow.runtime.checkpoints import thread_config
 
-    monkeypatch.setenv("CONTEXT_SOFT_LIMIT_ESTIMATE", "8000")
-    monkeypatch.setenv("CONTEXT_HARD_LIMIT_ESTIMATE", "18000")
+    monkeypatch.setenv("SUMMARIZATION_TRIGGER_TOKENS", "500")
+    monkeypatch.setenv("SUMMARIZATION_KEEP_MESSAGES", "4")
     get_settings.cache_clear()
     file_id = None
 
@@ -114,7 +114,7 @@ def test_nine_rounds_long_file_compaction_and_reopen(monkeypatch):
 
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):
             human = next(m for m in reversed(messages) if isinstance(m, HumanMessage))
-            if str(human.content).startswith("Summarize this completed"):
+            if not any(m.type == "system" for m in messages):
                 reply = AIMessage(
                     content="P06-SYNTHETIC previous evidence remains a preview; do not invent full-document findings."
                 )
@@ -165,7 +165,9 @@ def test_nine_rounds_long_file_compaction_and_reopen(monkeypatch):
             return await app.state.checkpointer.aget_tuple(thread_config(tid))
 
         saved = client.portal.call(state).checkpoint["channel_values"]
-        assert saved["context_summary"] and file_id in str(saved["messages"])
+        assert any(
+            m.additional_kwargs.get("lc_source") == "summarization" for m in saved["messages"]
+        )
         assert len(saved["messages"]) < 20
         history = client.get(f"/api/threads/{tid}/runs").json()
         assert len(history) == 9

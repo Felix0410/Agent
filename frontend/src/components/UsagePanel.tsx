@@ -51,6 +51,26 @@ export default function UsagePanel({
               : `${usage.provider_input_tokens} / ${usage.provider_output_tokens}`}
           </p>
           <p>未返回Provider统计的调用：{usage.usage_unknown_calls}</p>
+          {usage.budget.mode === "observe_only" && (
+            <>
+              <p>摘要模型尝试：{usage.summary_calls}；原生自动摘要次数：{usage.compaction_count}</p>
+              <p>
+                自动摘要：{usage.summary_settings.enabled ? "已启用" : "已关闭"}；
+                触发条件为约 {usage.summary_settings.trigger_tokens ?? "—"} Token 或{" "}
+                {usage.summary_settings.trigger_messages ?? "—"} 条消息，保留最近{" "}
+                {usage.summary_settings.keep_messages ?? "—"} 条（工具配对由框架保护）。
+                这是 LangChain 近似触发值，非Provider真实窗口或执行额度。
+              </p>
+              {usage.summary_diagnostic && (
+                <p>
+                  最近摘要消息数：{usage.summary_diagnostic.old_message_count} →{" "}
+                  {usage.summary_diagnostic.new_message_count}；近似Token：{" "}
+                  {usage.summary_diagnostic.estimated_before} → {usage.summary_diagnostic.estimated_after}；
+                  耗时 {usage.summary_diagnostic.elapsed_ms} ms。
+                </p>
+              )}
+            </>
+          )}
           {usage.budget.mode !== "observe_only" && (
             <p>
               历史UTF-8字节近似诊断（非真实Token、非当前执行额度）：

@@ -59,7 +59,16 @@ export default function RunStatus({
         </p>
       )}
       {run.error_code === "CONTEXT_BUDGET_EXCEEDED" && (
-        <p role="alert">单次上下文预算不足；可在运行用量中查看分项占用。</p>
+        <p role="alert">这是旧版本的上下文预算失败记录；新Run已改用原生自动摘要，不会自动重放此Run。</p>
+      )}
+      {run.error_code === "SUMMARY_FAILED" && (
+        <p role="alert">自动摘要失败；原会话记录保留，请检查模型可用性和摘要参数。</p>
+      )}
+      {run.error_code === "MODEL_CONTEXT_WINDOW_EXCEEDED" && (
+        <p role="alert">模型提供方报告实际上下文窗口不足；请缩小单次输入或调整摘要参数。</p>
+      )}
+      {run.error_code === "AGENT_RECURSION_LIMIT" && (
+        <p role="alert">工具循环已达到图递归保护上限；已有结果仍保留。</p>
       )}
       <ResearchPanel threadId={run.thread_id} runId={run.id} status={run.status} revision={planRevision} />
       <UsagePanel

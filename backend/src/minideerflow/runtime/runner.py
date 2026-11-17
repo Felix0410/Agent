@@ -4,7 +4,9 @@ import asyncio
 import logging
 from collections.abc import Callable
 
+from langchain_core.exceptions import ContextOverflowError
 from langchain_core.language_models import BaseChatModel
+from langgraph.errors import GraphRecursionError
 from openai import APIError, APITimeoutError
 
 from minideerflow.agents.context import AgentRunContext
@@ -16,6 +18,11 @@ from minideerflow.agents.middleware import (
 from minideerflow.agents.service import AgentExecutionError, validate_message
 from minideerflow.agents.state import P04AgentState
 from minideerflow.agents.subagents.dispatcher import TaskDispatcher
+from minideerflow.agents.summarization import (
+    SummarizationError,
+    summarization_middleware,
+    summary_configuration,
+)
 from minideerflow.config import Settings
 from minideerflow.core.model import ModelNotConfigured, build_chat_model
 from minideerflow.runtime.budget import BudgetError, RunBudget, RunBudgetTracker
@@ -199,6 +206,7 @@ class RunService:
                 self.usage,
                 lambda k, p: self._emit(run.id, k, p),
             )
+            tracker.summary_config = summary_configuration(self.settings)
             await tracker.initialize()
             await self.cancellation.register(run.id, asyncio.current_task(), tracker)
             await tracker.check()
@@ -229,6 +237,7 @@ class RunService:
                         timeout=self.settings.subagent_timeout_seconds,
                         recursion_limit=self.settings.subagent_recursion_limit,
                         tool_registry=self.tool_registry,
+                        settings=self.settings,
                     )
                     # 配置工具策略
                     policy = ToolPolicy(
@@ -262,12 +271,17 @@ class RunService:
                     context_schema=AgentRunContext,
                     state_schema=P04AgentState if p04 else None,
                     middleware=[
+                        *summarization_middleware(model, self.settings),
                         ModelUsageMiddleware(),
                         ToolOutputBudgetMiddleware(),
                         ToolGuardMiddleware(self.tool_registry),
                     ]
                     if p04
-                    else [ModelUsageMiddleware(), ToolUsageMiddleware("parent")],
+                    else [
+                        *summarization_middleware(model, self.settings),
+                        ModelUsageMiddleware(),
+                        ToolUsageMiddleware("parent"),
+                    ],
                     prompt_suffix=(
                         " For complex tasks use write_todos and keep the complete plan updated. "
                         "Use task to delegate focused goals. General is offline. "
@@ -301,7 +315,11 @@ class RunService:
                     [calculate],
                     self.checkpointer,
                     context_schema=AgentRunContext,
-                    middleware=[ModelUsageMiddleware(), ToolUsageMiddleware("parent")],
+                    middleware=[
+                        *summarization_middleware(model, self.settings),
+                        ModelUsageMiddleware(),
+                        ToolUsageMiddleware("parent"),
+                    ],
                 )
             # 7. 执行智能体
             try:
@@ -347,6 +365,12 @@ class RunService:
                 await self._finish_cancel(run.id, graph_started, tracker)
             else:
                 await self._fail_run(run.id, "AGENT_EXECUTION_FAILED", graph_started)
+        except SummarizationError:
+            await self._fail_run(run.id, "SUMMARY_FAILED", graph_started)
+        except ContextOverflowError:
+            await self._fail_run(run.id, "MODEL_CONTEXT_WINDOW_EXCEEDED", graph_started)
+        except GraphRecursionError:
+            await self._fail_run(run.id, "AGENT_RECURSION_LIMIT", graph_started)
         except BudgetError as exc:
             await self._fail_run(run.id, exc.code, graph_started)
         except asyncio.CancelledError:

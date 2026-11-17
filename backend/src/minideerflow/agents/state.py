@@ -24,4 +24,5 @@ class P04AgentState(AgentState):
 
     # 继承默认字段 messages: list[BaseMessage]
     todos: NotRequired[list[dict]]
+    # 只兼容旧Checkpoint字段；新摘要由官方HumanMessage(lc_source=summarization)保存。
     context_summary: NotRequired[str]

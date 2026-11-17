@@ -41,6 +41,9 @@ class RunUsage(BaseModel):
     estimate_unit: str = "utf8_json_bytes_v1"
     context_breakdown: dict | None = None
     tool_history_compaction_count: int = 0
+    summary_settings: dict = Field(default_factory=dict)
+    summary_calls: int = 0
+    summary_diagnostic: dict | None = None
 
 
 class UsageRepository:
@@ -152,6 +155,19 @@ class UsageRepository:
                 "UPDATE run_usage SET budget_json=? WHERE run_id=?", (json.dumps(budget), run_id)
             )
 
+    async def summary_observation(self, run_id, data):
+        """只保存官方摘要前后数值，原Run/来源/工具轨迹不因Graph压缩删除。"""
+        async with self.database.transaction() as conn:
+            async with conn.execute(
+                "SELECT budget_json FROM run_usage WHERE run_id=?", (run_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            budget = json.loads(row[0])
+            budget["summary_diagnostic"] = data
+            await conn.execute(
+                "UPDATE run_usage SET budget_json=? WHERE run_id=?", (json.dumps(budget), run_id)
+            )
+
     async def get(self, run_id):
         """读取同Run权威累计，未开始时Provider数字仍为NULL。"""
         async with self.database.transaction() as conn:
@@ -164,6 +180,12 @@ class UsageRepository:
             data["recorded"] = True
             data["budget"] = json.loads(data.pop("budget_json"))
             data["context_breakdown"] = data["budget"].get("context_breakdown")
+            data["summary_diagnostic"] = data["budget"].get("summary_diagnostic")
+            data["summary_settings"] = data["budget"].get("summarization", {})
+            async with conn.execute(
+                "SELECT COUNT(*) FROM usage_calls WHERE run_id=? AND source='summary'", (run_id,)
+            ) as cur:
+                data["summary_calls"] = (await cur.fetchone())[0]
             data["tool_history_compaction_count"] = data["budget"].get(
                 "tool_history_compaction_count", 0
             )

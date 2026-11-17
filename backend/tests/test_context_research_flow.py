@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from test_lead import ScriptedModel
+from test_native_summarization import assert_tool_pairs
 from test_runs_api import drain
 
 from minideerflow.config import get_settings
@@ -28,7 +29,7 @@ class ResearchFlowModel(ScriptedModel):
         self.seen.append(list(messages))
         first = str(messages[0].content)
         last = messages[-1]
-        if first.startswith("Summarize this completed"):
+        if not any(m.type == "system" for m in messages):
             reply = AIMessage(
                 content="Synthetic untrusted history only. Sources are not independently verified."
             )
@@ -186,8 +187,9 @@ def install_synthetic_research(monkeypatch):
 def test_single_question_research_report_children_and_reopen(monkeypatch, low_limits):
     requests, models = install_synthetic_research(monkeypatch)
     if low_limits:
-        monkeypatch.setenv("CONTEXT_SOFT_LIMIT_ESTIMATE", "12000")
-        monkeypatch.setenv("CONTEXT_HARD_LIMIT_ESTIMATE", "24000")
+        monkeypatch.setenv("SUMMARIZATION_TRIGGER_TOKENS", "2500")
+        monkeypatch.setenv("SUMMARIZATION_KEEP_MESSAGES", "4")
+        monkeypatch.setenv("SUMMARIZATION_TRIGGER_MESSAGES", "12")
         get_settings.cache_clear()
     app = create_app()
     with TestClient(app) as client:
@@ -202,15 +204,17 @@ def test_single_question_research_report_children_and_reopen(monkeypatch, low_li
         usage = client.get(f"/api/runs/{rid}/usage").json()
         assert usage["tool_calls"] == 15  # 11父工具 + 两个child各搜索/取文。
         summary_calls = sum(
-            len(m.seen)
-            for m in models
-            if m.seen and str(m.seen[0][0].content).startswith("Summarize this completed")
+            1
+            for model in models
+            for request in model.seen
+            if not any(m.type == "system" for m in request)
         )
         assert usage["model_calls"] == 17 + summary_calls  # 父11 + 子各3 + 摘要。
-        assert usage["estimated_v2_calls"] == usage["model_calls"]
+        assert usage["estimated_v2_calls"] == 0
+        assert usage["summary_calls"] == summary_calls
         assert usage["provider_input_tokens"] is None
         if low_limits:
-            assert usage["tool_history_compaction_count"] > 0
+            assert usage["compaction_count"] > 0
         tasks = client.get(f"/api/runs/{rid}/subtasks").json()
         assert len(tasks) == 2 and all(t["status"] == "COMPLETED" for t in tasks)
         assert client.get(f"/api/runs/{rid}/todos").json()[0]["status"] == "completed"
@@ -225,11 +229,18 @@ def test_single_question_research_report_children_and_reopen(monkeypatch, low_li
             return await app.state.checkpointer.aget_tuple(thread_config(tid))
 
         saved = client.portal.call(saved_state).checkpoint["channel_values"]
-        assert any(m.content == "SYNTHETIC_CURRENT_GOAL" for m in saved["messages"])
+        assert (
+            run["input_message"] == "SYNTHETIC_CURRENT_GOAL"
+        )  # 原始目标保留在业务历史，Graph由官方摘要管理。
         if low_limits:
-            assert saved["context_summary"]
+            assert any(
+                m.additional_kwargs.get("lc_source") == "summarization" for m in saved["messages"]
+            )
         assert sum(path == "/search" for path, _ in requests) == 3
         assert sum(path == "/extract" for path, _ in requests) == 3
+        for model in models:
+            for messages in model.seen:
+                assert_tool_pairs(messages)
     with TestClient(create_app()) as client:
         assert client.get(f"/api/runs/{rid}/usage").json() == usage
         assert client.get(f"/api/runs/{rid}/research/evidence").json() == records

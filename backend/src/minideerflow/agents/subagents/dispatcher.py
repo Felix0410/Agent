@@ -25,12 +25,14 @@ class TaskDispatcher:
         timeout=35,
         recursion_limit=14,
         tool_registry=None,
+        settings=None,
     ):
         if tool_registry is None:
             tool_registry = ToolRegistry()
             register_builtin_tools(tool_registry)
             tool_registry.freeze()
         self.tool_registry = tool_registry
+        self.settings = settings
         self.repository = repository
         self.model_factory = model_factory
         self.registry = registry or TaskRegistry()
@@ -120,7 +122,13 @@ class TaskDispatcher:
                     usage_recorder=context.usage_recorder,
                 )
                 result = await execute_child(
-                    spec, description, child, self.model_factory, tools, record.id
+                    spec,
+                    description,
+                    child,
+                    self.model_factory,
+                    tools,
+                    record.id,
+                    settings=self.settings,
                 )
                 # 6. 提交终态事件
                 phase = asyncio.create_task(self._finish(context, result))

@@ -289,15 +289,16 @@ def test_full_graph_todos_skills_parallel_children_report_restart(monkeypatch):
         assert c.get(f"/api/artifacts/{aid}", params={"thread_id": tid}).content == content
 
 
-def test_compaction_preserves_only_current_run_evidence(tmp_path):
+def test_summary_cannot_grant_invented_evidence_ids(tmp_path):
     import asyncio
 
-    from langchain_core.messages import HumanMessage
+    import pytest
     from test_file_tools import active_run
     from test_workspace import workspace
 
     from minideerflow.agents.context import AgentRunContext
-    from minideerflow.agents.context_manager import ContextManager
+    from minideerflow.research.models import ResearchError
+    from minideerflow.research.report import ReportInput
     from minideerflow.research.repository import ResearchRepository
     from minideerflow.research.service import ResearchService
     from minideerflow.runtime.budget import RunBudget, RunBudgetTracker
@@ -327,11 +328,15 @@ def test_compaction_preserves_only_current_run_evidence(tmp_path):
                 research_service=ResearchService(repo, object(), ws),
                 budget_tracker=tracker,
             )
-            summary, refs = await ContextManager().build_summary(
-                [HumanMessage(content=eid + " " + invented), AIMessage(content="done")],
-                ctx,
-                lambda: ScriptedModel(responses=[AIMessage(content=eid + " " + invented)]),
-            )
-            assert eid in summary and refs == [eid] and invented not in summary
+            # 摘要文字不再自行授予ID；唯一引用权威仍是当前Run的EvidenceStore。
+            with pytest.raises(ResearchError, match="RESEARCH_INVALID_CITATION"):
+                await ctx.research_service.save_report(
+                    ctx,
+                    ReportInput(
+                        title="synthetic",
+                        findings=[{"claim": "synthetic", "evidence_ids": [eid, invented]}],
+                        limitations=["Synthetic summary; invented reference must fail"],
+                    ),
+                )
 
     asyncio.run(scenario())
