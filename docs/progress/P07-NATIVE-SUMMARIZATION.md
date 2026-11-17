@@ -48,3 +48,18 @@
 - 真实Smoke仅为强制触发设置trigger128/keep2；第二问消息3→3、近似Token145→453，第三问消息5→3但Token502→662，说明极短文本生成结构化摘要可能扩张，不能声称每次摘要必然减少Token。这些数值完整保留，不用其作为正常默认值；正常本地.env仍6000 Token/24消息、keep8、trim4000，模型实际窗口未确认，不猜容量。
 - README和旧P07修复进度已指向当前原生方案；旧页作为历史证据保留，不再误导当前字节执行配置。中文注释覆盖官方扩展点、回调唯一记账/取消收尾、Child已完成工具观察、状态与历史兼容，根System提示词/工具描述/授权集合不变。
 - 尚未验证：真实Tavily公网来源支持度、实际模型窗口规格/账单、用户手动验收、PyCharm GUI及其它OS。任意大新问题/工具Schema仍可能超过真实模型窗口，官方摘要失败/图循环/超时会准确失败；旧FAILED Run不自动重放。P07保持PENDING_REVIEW，不合并main、不开始P08。
+
+## Git交付核验
+
+GitHub连接器已把方案HEAD `2ebf6910a1e91c447fd9a647bf26a94fe3f1fc1a` 正常快进4个R0–R3提交；compare确认ahead_by=4、behind_by=0。逐个blob/tree SHA与本地实现核对一致，没有强推、共享历史改写、主分支合并、评论或消息发送。
+
+| 阶段 | 本地实现提交 | GitHub交付提交（相同内容tree） |
+| --- | --- | --- |
+| R0 | `2a633fd51ad3bdd5259f2e00b5ea900484f84c69` | `30feddff8f6de2d12c1c523b5980edc567cf1254` |
+| R1 | `aaa6ffadaece6e780525a5c13ba7db810ac81d27` | `fcefcb63ca14935e20c50ec1f2481a3195b074fd` |
+| R2 | `d60ccdfaf61aed4f5a772f127d75f0a5a6b7caaa` | `74440029e182457521ce81abb79aa6a1a80ca073` |
+| R3 | `215fbeab4355bad3a0df5d051a0d86626aae2819` | `28b4f126e8850b34ab47ce7dae4271964a9b60a6` |
+
+连接器使用服务端作者/时间创建提交，故SHA与本地实现不同而代码tree相同。原本地实现历史保留在`local/p07-native-implementation-20261118`；当前重构分支在完整SHA/tree核验后对齐GitHub历史。本段为单独纯文档交付记录。最终工作区不含.env、真实用户库、缓存、dist或/tmp合成产物；密钥值扫描通过，没有推送认证信息。
+
+本机两种解释器main.py隔离启动/health验证后均已关闭，8000保持空闲。代码已完成、状态仍PENDING_REVIEW；请在自己的PyCharm重启后，用原Thread进行连续追问验收，历史已FAILED的Run不会自动重放。若因旧失败需恢复，请保留该记录，另建正常Thread验证；不会清理/重建用户Checkpoint。
