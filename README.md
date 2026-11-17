@@ -460,3 +460,13 @@ PyCharm继续使用`backend/.venv/bin/python`、`backend/src`为Sources Root，�
 本轮验证：最终局部 **380 passed，0 failed**（仅P07和直接受影响P01–P06接口），uv锁/安装/Ruff/前端build通过。Fake真实Graph完成Todo/Skill/Lead搜索/两个Child搜索提取/报告/重启；浏览器验证来源等级、取消、禁用状态、查看/下载及SHA一致。
 
 真实`deepseek-flash`工具调用另行成功：5次模型调用、5次工具，Provider输入11618/输出696 tokens、约7.55秒，1407-byte报告。**此模型测试的搜索提供方明确为Fake，不是公网研究。** 本机无Tavily Key，真实Search/Extract为`NOT_RUN_EXTERNAL_DEPENDENCY`；未查询模型账单金额或Tavily费用。用户提供配置后仍需手动核验真实公网来源。其它OS/PyCharm GUI/真实联网Research Child尚未验证；不进入P08。
+
+## P07 CONTEXT_BUDGET_EXCEEDED 专项修复（设计就绪，未编码）
+
+用户发现单个复杂问题就报 `CONTEXT_BUDGET_EXCEEDED`。已在 `fix/p07-context-budget-exceeded` 分支提交 [逐文件修复合同](docs/tasks/P07-CONTEXT-BUDGET-FIX.md) 和 [修复独立进度](docs/progress/P07-CONTEXT-FIX.md)；**当前只写了设计，没有运行/修复新业务代码，也没有新通过测试**。
+
+根因候选已从 P07 源码核对：现有“估算 Token”实为UTF-8 JSON字节（默认soft12k/hard18k）；Child固定18k；`ContextManager.partition` 只能按旧用户回合压缩，而Deep Research常在**同一次用户问题**内累积多次完整ToolCall；Run还有累计120k字节近似估算保护。没有用户报错Run的实际占用数字时，不能推断哪个条件先发生。
+
+修复顺序：**A** 脱敏成本分解日志/父子配置一致、字节预算soft24k/hard48k/累计480k（仍需根据实际模型窗口判断是否适用）→ **B** 只压缩当前Run内已完成且成对的旧工具批次，保留用户目标/Todo/真实EvidenceID/最近消息和Graph状态，摘要按预算分块 → **C** 区分旧字节代理估算、版本化Token估算及Provider真实usage，不能将已有SQL历史数据重新解释 → **D** 用低阈值Fake真实Graph测试压缩、普通问答/研究报告、子代理、取消/刷新与前端提示。不通过工具ID配对、证据引用、预算准确性/恢复测试时停止，不自动进入P08。
+
+P07原业务与P02–P07 `PENDING_REVIEW` 均不变。本修复可以先执行A止血，再做B的根治；不建议只无限调大限制。
