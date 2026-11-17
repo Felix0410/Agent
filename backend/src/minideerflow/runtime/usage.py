@@ -34,6 +34,7 @@ class RunUsage(BaseModel):
     budget: dict = Field(default_factory=dict)
     estimate_unit: str = "utf8_json_bytes_v1"
     context_breakdown: dict | None = None
+    tool_history_compaction_count: int = 0
 
 
 class UsageRepository:
@@ -121,6 +122,23 @@ class UsageRepository:
                     (json.dumps(budget), run_id),
                 )
 
+    async def record_compaction(self, run_id, reason):
+        """刷新后也能区分本轮工具压缩，不从模型文本猜测实际次数。"""
+        if reason != "CURRENT_RUN_TOOL_HISTORY":
+            return
+        async with self.database.transaction() as conn:
+            async with conn.execute(
+                "SELECT budget_json FROM run_usage WHERE run_id=?", (run_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            budget = json.loads(row[0])
+            budget["tool_history_compaction_count"] = (
+                budget.get("tool_history_compaction_count", 0) + 1
+            )
+            await conn.execute(
+                "UPDATE run_usage SET budget_json=? WHERE run_id=?", (json.dumps(budget), run_id)
+            )
+
     async def get(self, run_id):
         """读取同Run权威累计，未开始时Provider数字仍为NULL。"""
         async with self.database.transaction() as conn:
@@ -133,4 +151,7 @@ class UsageRepository:
             data["recorded"] = True
             data["budget"] = json.loads(data.pop("budget_json"))
             data["context_breakdown"] = data["budget"].get("context_breakdown")
+            data["tool_history_compaction_count"] = data["budget"].get(
+                "tool_history_compaction_count", 0
+            )
             return RunUsage(**data)

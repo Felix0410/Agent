@@ -41,3 +41,12 @@
 - 修改config/budget/usage/runner/context_manager/middleware/lead、.env.example、UsagePanel/RunStatus/runtime类型、新test_context_budget_fix。默认soft24000/hard48000/cumulative480000，父子不再隐含18k；System与Schema各计一次，过大固定开销不调用摘要。SQL预算JSON保存最后分项，仅数值、版本和枚举。旧estimated_input_tokens列仍为字节近似，不改历史含义。
 - 局部：`pytest -q tests/test_context_budget_fix.py tests/test_config.py tests/test_budget.py tests/test_usage.py tests/test_context.py tests/test_budget_demo.py tests/test_research_tools.py tests/test_subagents.py`，**57 passed in 2.53s**；本次核心修改Ruff check/format通过，`npm run build`通过43 modules。Fake模型/Provider，不代表公网验收；不升级依赖。
 - UI同步真实Token/字节近似单位、请求分项及预算错误说明；A不宣称已解决同Run压缩。提交SHA后续记录；未推送、尚未浏览器手测、未自动合并。
+
+## B · 同一Human内完整工具块压缩（2026-11-17）
+
+- A提交：`957bde9`。修改context_manager/middleware/usage、前端UsagePanel/runtime类型、新test_context_tool_rounds。
+- 解析完整并行Tool Call批次，遇到未配对/重复/invalid调用即保留该批及之后；边界扩大以保留最近至少6条实际消息，原Human目标不替换。多轮旧边界保留。摘要连续数据片段最多8KiB，滚动摘要最多2KiB，逐批共享预算；完整处理、引用归属验证、最终硬预算复核后才返回RemoveMessage替换。工具失败状态另以可信数据保留，Todo仍独立状态。
+- 真实`stream_agent`的messages+updates流累计当前Run工具消息，Graph压缩后8次ToolTrace/SSE ID依旧完整，无需修改流式实现。SQL追加本轮工具历史压缩次数，UI刷新后提示真实次数。
+- `pytest -q tests/test_context_tool_rounds.py tests/test_context.py tests/test_budget_demo.py tests/test_research_demo.py tests/test_research_child.py tests/test_cancel_recovery.py`：**37 passed in 7.65s**；Ruff通过本次修改；前端build通过43 modules。
+- 单Human八次工具调用用soft6500/hard14000真实触发压缩且成功，Todo/current goal保留；摘要空/>2KiB/超时/外部Task取消/多批累计预算耗尽均保留旧Checkpoint。最初直接在Fake节点raise CancelledError被锁版LangGraph转换为NodeCancelledError，已改成实际外部Task.cancel验证取消链，不吞框架行为。
+- 模型与来源仍Fake，不代表公网/真实模型；真实P07报告+两个并发Child强制压缩全链在D核验。未推送，不修改用户旧Run。

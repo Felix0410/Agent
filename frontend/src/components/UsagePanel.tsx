@@ -63,6 +63,9 @@ export default function UsagePanel({
               原因：{usage.context_breakdown.reason}
             </p>
           )}
+          {usage.tool_history_compaction_count > 0 && (
+            <p>已压缩本轮工具历史：{usage.tool_history_compaction_count} 次，完整来源仍保留。</p>
+          )}
           <p>
             已记录耗时：{(usage.elapsed_ms / 1000).toFixed(2)} /{" "}
             {usage.budget.max_seconds ?? "—"}秒；上下文压缩：

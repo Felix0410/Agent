@@ -219,6 +219,7 @@ export type RunUsage = {
   } | null;
   elapsed_ms: number;
   compaction_count: number;
+  tool_history_compaction_count: number;
   output_externalized_count: number;
   budget: Record<string, unknown> & {
     max_model_calls?: number;

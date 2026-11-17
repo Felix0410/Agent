@@ -4,7 +4,7 @@ import asyncio
 
 from langchain.agents.middleware import AgentMiddleware
 
-from minideerflow.runtime.budget import BudgetError, budget_breakdown, estimate_messages
+from minideerflow.runtime.budget import BudgetError, budget_breakdown
 
 
 class UsageBudgetMiddleware(AgentMiddleware):
@@ -96,12 +96,25 @@ class ContextCompactionMiddleware(AgentMiddleware):
         if getattr(context, "budget_tracker", None) is None:
             return None
         await context.budget_tracker.check()
-        result = await self.manager.prepare(state["messages"], context, self.model_factory)
+        try:
+            result = await self.manager.prepare(state["messages"], context, self.model_factory)
+        except BudgetError as exc:
+            breakdown = budget_breakdown(
+                state["messages"],
+                self.manager.tools,
+                self.manager.system_message,
+                soft=self.manager.soft,
+                hard=self.manager.hard,
+                cumulative=context.budget_tracker.estimated,
+            )
+            await context.budget_tracker.record_context(breakdown, exc.reason)
+            raise
         if result is None:
             return None
         messages, summary, before = result
         tracker = context.budget_tracker
         tracker.compactions += 1
+        await tracker.repository.record_compaction(context.run_id, self.manager.compaction_reason)
         await tracker.flush()
         if tracker.event_sink:
             await tracker.emit(
@@ -111,7 +124,10 @@ class ContextCompactionMiddleware(AgentMiddleware):
                     "old_message_count": len(state["messages"]),
                     "new_message_count": len(messages),
                     "estimated_before": before,
-                    "estimated_after": estimate_messages(messages) + self.manager.tool_estimate,
+                    "estimated_after": budget_breakdown(
+                        messages, self.manager.tools, self.manager.system_message
+                    ).total_bytes,
+                    "reason": self.manager.compaction_reason,
                 },
             )
         return {
