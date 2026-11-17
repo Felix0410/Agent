@@ -1,4 +1,4 @@
-"""每Run共享、先预扣的预算，不把token估算当Provider实际用量。"""
+"""每Run共享的用量观察与取消上下文；历史字节字段不再构成执行许可。"""
 
 import asyncio
 import json
@@ -20,7 +20,7 @@ class BudgetError(Exception):
 
 @dataclass(frozen=True)
 class RunBudget:
-    """单次Run的预算"""
+    """兼容旧构造接口；只有max_seconds仍用于运行资源时限。"""
 
     max_model_calls: int = 40
     max_tool_calls: int = 30
@@ -110,7 +110,7 @@ def estimate_tools(tools):
 
 
 class RunBudgetTracker:
-    """单次Run的预算跟踪器"""
+    """保留历史类名的观察上下文；计数和估算只记录，不授予执行许可。"""
 
     def __init__(self, run_id, budget, repository, event_sink=None):
         self.run_id = run_id
@@ -125,7 +125,6 @@ class RunBudgetTracker:
         self.compactions = 0
         self.externalized = 0
         self.cancelled = asyncio.Event()
-        self.exceeded = False
         self.outcome_unknown = False
         self.cancel_check = None
         self.context_soft_limit = 24000
@@ -138,31 +137,16 @@ class RunBudgetTracker:
         await self.repository.start(
             self.run_id,
             {
-                **asdict(self.budget),
+                "mode": "observe_only",
+                "execution_limits": False,
+                "max_seconds": self.budget.max_seconds,
                 "estimate_unit": "utf8_json_bytes_v1",
-                "estimator_version": "utf8_conservative_v2",
-                "v2_unit": "estimated_tokens_v2",
-                "model_context_window_tokens": self.model_context_window_tokens,
-                "model_output_reserve_tokens": self.model_output_reserve_tokens,
             },
         )
 
     async def reserve_context(self, estimate, source="parent"):
-        """窗口只在用户确认后启用；与字节上限同时检查，不猜模型实际窗口。"""
-        breakdown = estimate.breakdown
-        window = self.model_context_window_tokens
-        if (
-            window is not None
-            and estimate.estimated_tokens + self.model_output_reserve_tokens > window
-        ):
-            await self.record_context(breakdown, "MODEL_CONTEXT_WINDOW_EXCEEDED")
-            raise BudgetError("CONTEXT_BUDGET_EXCEEDED", "MODEL_CONTEXT_WINDOW_EXCEEDED")
-        if breakdown.total_bytes > min(self.context_hard_limit, breakdown.hard_bytes):
-            await self.record_context(breakdown, "ACTIVE_MESSAGES")
-            raise BudgetError("CONTEXT_BUDGET_EXCEEDED", "ACTIVE_MESSAGES")
-        return await self.reserve(
-            "model", breakdown.total_bytes, source, estimate_v2=estimate.estimated_tokens
-        )
+        """弃用适配：旧调用方仍可记录字节诊断，但窗口/累计值不再拦截执行。"""
+        return await self.reserve("model", estimate.breakdown.total_bytes, source)
 
     async def record_context(self, breakdown, reason="WITHIN_LIMIT"):
         """SQL保存最后一次分项，日志只记录数值和固定原因枚举。"""
@@ -176,25 +160,13 @@ class RunBudgetTracker:
             self.cancelled.set()
         if self.cancelled.is_set():
             raise asyncio.CancelledError
-        if self.exceeded or time.monotonic() - self.started >= self.budget.max_seconds:
-            self.exceeded = True
-            raise BudgetError()
+        if time.monotonic() - self.started >= self.budget.max_seconds:
+            raise TimeoutError("run deadline exceeded")
 
     async def reserve(self, kind, estimate=0, source="parent", *, estimate_v2=None):
-        """预扣预算"""
-        # 1. 父子共享同一锁，同一预算
+        """唯一invocation先登记再执行；并发安全计数，不限制40/30或输入字节。"""
         async with self.lock:
             await self.check()
-            if (
-                kind == "model"
-                and (
-                    self.model_calls >= self.budget.max_model_calls
-                    or self.estimated + estimate > self.budget.max_input_tokens_estimate
-                )
-            ) or (kind == "tool" and self.tool_calls >= self.budget.max_tool_calls):
-                self.exceeded = True
-                raise BudgetError()
-            # 2. 预扣同时覆盖次数与累计输入；失败也不会返还。
             if kind == "model":
                 self.model_calls += 1
                 self.estimated += estimate
@@ -208,7 +180,6 @@ class RunBudgetTracker:
                 estimated_input_tokens_v2=estimate_v2,
                 estimator_version="utf8_conservative_v2" if estimate_v2 is not None else None,
             )
-            # 3. 唯一ID持久化完成后才返回给真正执行者。
             await self.repository.begin(self.run_id, call)
             return call, time.monotonic()
 

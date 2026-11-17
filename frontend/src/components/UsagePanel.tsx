@@ -39,9 +39,10 @@ export default function UsagePanel({
       {usage && usage.recorded !== false && (
         <>
           <p>
-            模型调用：{usage.model_calls} /{" "}
-            {usage.budget.max_model_calls ?? "—"}；工具调用：{usage.tool_calls}{" "}
-            / {usage.budget.max_tool_calls ?? "—"}
+            模型调用：{usage.model_calls}；工具调用：{usage.tool_calls}
+            {usage.budget.mode === "observe_only"
+              ? "（仅统计，不设调用次数或字节执行额度）"
+              : "（历史Run统计；原预算仅供查阅）"}
           </p>
           <p>
             Provider已报告输入/输出（真实Token）：
@@ -49,15 +50,17 @@ export default function UsagePanel({
               ? "未提供统计"
               : `${usage.provider_input_tokens} / ${usage.provider_output_tokens}`}
           </p>
-          <p>
-            未返回Provider统计的调用：{usage.usage_unknown_calls}
-            ；UTF-8 字节近似预算（非真实Token）：{usage.estimated_input_tokens} /{" "}
-            {usage.budget.max_input_tokens_estimate ?? "—"}（{usage.estimate_unit}）
-          </p>
-          {usage.estimated_input_tokens_v2 !== null && (
+          <p>未返回Provider统计的调用：{usage.usage_unknown_calls}</p>
+          {usage.budget.mode !== "observe_only" && (
+            <p>
+              历史UTF-8字节近似诊断（非真实Token、非当前执行额度）：
+              {usage.estimated_input_tokens}（{usage.estimate_unit}）
+            </p>
+          )}
+          {usage.budget.mode !== "observe_only" && usage.estimated_input_tokens_v2 !== null && (
             <p>输入Token保守预估：{usage.estimated_input_tokens_v2}（{usage.estimated_token_unit} / {usage.estimator_version}；覆盖 {usage.estimated_v2_calls} 次调用，非Provider实际统计）</p>
           )}
-          {usage.context_breakdown && (
+          {usage.budget.mode !== "observe_only" && usage.context_breakdown && (
             <p>
               最近请求：System {usage.context_breakdown.system_bytes}；工具定义{" "}
               {usage.context_breakdown.tool_schema_bytes}；消息{" "}

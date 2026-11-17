@@ -64,7 +64,7 @@ def test_real_model_hook_usage_and_child_shared(monkeypatch):
         assert client.get(f"/api/runs/{rid}/usage").json() == usage
 
 
-def test_budget_blocks_before_second_model(monkeypatch):
+def test_legacy_call_limit_no_longer_blocks_second_model(monkeypatch):
     monkeypatch.setenv("RUN_MAX_MODEL_CALLS", "1")
     get_settings.cache_clear()
     models = []
@@ -89,8 +89,8 @@ def test_budget_blocks_before_second_model(monkeypatch):
         rid = client.post(f"/api/threads/{tid}/runs", json={"message": "calc"}).json()["run_id"]
         drain(client, app)
         run = client.get("/api/runs/" + rid).json()
-        assert run["status"] == "FAILED" and run["error_code"] == "BUDGET_EXCEEDED"
-        assert len(models[-1].seen) == 1
+        assert run["status"] == "SUCCEEDED" and run["error_code"] is None
+        assert len(models[-1].seen) == 2
 
 
 def test_nine_rounds_long_file_compaction_and_reopen(monkeypatch):

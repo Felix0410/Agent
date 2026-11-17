@@ -1,48 +1,36 @@
-"""使用官方hook记录最终模型响应；父子共享预算且不改消息对象。"""
+"""使用官方hook记录最终模型响应；父子共享用量与取消信号且不改消息对象。"""
 
 import asyncio
 
 from langchain.agents.middleware import AgentMiddleware
 
-from minideerflow.runtime.budget import BudgetError, budget_breakdown
+from minideerflow.runtime.budget import budget_breakdown
 
 
-class UsageBudgetMiddleware(AgentMiddleware):
+class ModelUsageMiddleware(AgentMiddleware):
     """统计实际模型调用，不监听token delta，避免重复入账。"""
 
     def __init__(self, source="parent", hard_limit=None):
         self.source = source
-        self.hard_limit = hard_limit
 
     async def awrap_model_call(self, request, handler):
-        """预算预扣后执行一次，最终回执入账且取消继续向上传播。"""
+        """调用登记后执行一次，最终回执入账且取消继续向上传播。"""
         # 1. 估算必须覆盖真实消息、System与公开工具Schema。
         context = request.runtime.context
         tracker = getattr(context, "budget_tracker", None)
         if tracker is None:
             return await handler(request)
-        hard = tracker.context_hard_limit
-        if self.hard_limit is not None:
-            hard = min(hard, self.hard_limit)
-        estimate = tracker.estimator.estimate(
+        # 字节大小仅作诊断；模型真实窗口与摘要由Provider/官方中间件处理。
+        breakdown = budget_breakdown(
             request.messages,
             request.tools,
             request.system_message,
-            soft=tracker.context_soft_limit,
-            hard=hard,
+            soft=0,
+            hard=0,
             cumulative=tracker.estimated,
         )
-        breakdown = estimate.breakdown
-        reason = "WITHIN_LIMIT"
-        if breakdown.system_bytes + breakdown.tool_schema_bytes > hard:
-            reason = "BASE_OVERHEAD_EXCEEDS_HARD_LIMIT"
-        elif breakdown.total_bytes > hard:
-            reason = "ACTIVE_MESSAGES"
-        await tracker.record_context(breakdown, reason)
-        if reason != "WITHIN_LIMIT":
-            raise BudgetError("CONTEXT_BUDGET_EXCEEDED", reason)
-        # 2. 预留成功才进入官方handler，不监听chunk重复计数。
-        reserved = await tracker.reserve_context(estimate, self.source)
+        await tracker.record_context(breakdown, "OBSERVATION_ONLY")
+        reserved = await tracker.reserve("model", breakdown.total_bytes, self.source)
         usage = None
         status = "error"
         try:
@@ -59,7 +47,7 @@ class UsageBudgetMiddleware(AgentMiddleware):
             await tracker.finish(reserved, status, usage)
 
 
-class ChildToolBudgetMiddleware(AgentMiddleware):
+class ToolUsageMiddleware(AgentMiddleware):
     """child与旧轻量工具路径共用计数，不改变原有工具集合。"""
 
     def __init__(self, source="child"):
@@ -80,57 +68,6 @@ class ChildToolBudgetMiddleware(AgentMiddleware):
             await tracker.finish(reserved, status)
 
 
-class ContextCompactionMiddleware(AgentMiddleware):
-    """复用官方abefore_model+RemoveMessage的最小安全分区实现。"""
-
-    def __init__(self, manager, model_factory):
-        self.manager = manager
-        self.model_factory = model_factory
-
-    async def abefore_model(self, state, runtime):
-        """完整分区成功后才返回官方State消息替换，不修改Todo。"""
-        from langchain_core.messages import RemoveMessage
-        from langgraph.graph.message import REMOVE_ALL_MESSAGES
-
-        context = runtime.context
-        if getattr(context, "budget_tracker", None) is None:
-            return None
-        await context.budget_tracker.check()
-        try:
-            result = await self.manager.prepare(state["messages"], context, self.model_factory)
-        except BudgetError as exc:
-            breakdown = budget_breakdown(
-                state["messages"],
-                self.manager.tools,
-                self.manager.system_message,
-                soft=self.manager.soft,
-                hard=self.manager.hard,
-                cumulative=context.budget_tracker.estimated,
-            )
-            await context.budget_tracker.record_context(breakdown, exc.reason)
-            raise
-        if result is None:
-            return None
-        messages, summary, before = result
-        tracker = context.budget_tracker
-        tracker.compactions += 1
-        await tracker.repository.record_compaction(context.run_id, self.manager.compaction_reason)
-        await tracker.flush()
-        if tracker.event_sink:
-            await tracker.emit(
-                "context_compacted",
-                {
-                    "run_id": context.run_id,
-                    "old_message_count": len(state["messages"]),
-                    "new_message_count": len(messages),
-                    "estimated_before": before,
-                    "estimated_after": budget_breakdown(
-                        messages, self.manager.tools, self.manager.system_message
-                    ).total_bytes,
-                    "reason": self.manager.compaction_reason,
-                },
-            )
-        return {
-            "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *messages],
-            "context_summary": summary,
-        }
+# 旧内部导入名仅用于兼容，已弃用其预算语义，生产装配使用新名称。
+UsageBudgetMiddleware = ModelUsageMiddleware
+ChildToolBudgetMiddleware = ToolUsageMiddleware

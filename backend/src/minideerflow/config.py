@@ -35,11 +35,6 @@ class Settings(BaseSettings):
     run_queue_size: int = Field(default=8, ge=1, le=8)
     # P06 持久Run最长600秒，与前端720秒轮询配套；P01单轮仍为45秒。
     run_timeout_seconds: float = Field(default=600, gt=0, le=600)
-    context_soft_limit_estimate: int = Field(default=24000, ge=64, le=96000)
-    context_hard_limit_estimate: int = Field(default=48000, ge=128, le=128000)
-    run_max_model_calls: int = Field(default=40, ge=1, le=40)
-    run_max_tool_calls: int = Field(default=30, ge=1, le=30)
-    run_max_input_tokens_estimate: int = Field(default=480000, ge=1, le=1000000)
     # 只有用户确认模型窗口后才配置；未知窗口继续执行字节硬保护。
     model_context_window_tokens: int | None = Field(default=None, ge=128, le=2000000)
     model_output_reserve_tokens: int = Field(default=2048, ge=1, le=128000)
@@ -69,8 +64,6 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def separate_database_files(self) -> "Settings":
         """业务库与 Graph 库必须分开，不能误认为两者有原子事务。"""
-        if self.context_soft_limit_estimate >= self.context_hard_limit_estimate:
-            raise ValueError("context soft limit must be less than hard limit")
         if (
             self.model_context_window_tokens is not None
             and self.model_output_reserve_tokens >= self.model_context_window_tokens

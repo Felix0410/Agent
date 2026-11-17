@@ -6,7 +6,7 @@ from langchain.agents import create_agent
 from openai import APIError, APITimeoutError
 
 from minideerflow.agents.context import ChildContext
-from minideerflow.agents.middleware import ChildToolBudgetMiddleware, UsageBudgetMiddleware
+from minideerflow.agents.middleware import ModelUsageMiddleware, ToolUsageMiddleware
 from minideerflow.agents.service import extract_final_answer, extract_run_tool_traces
 from minideerflow.agents.subagents.models import TaskResult, TaskStatus
 from minideerflow.runtime.budget import BudgetError
@@ -25,11 +25,11 @@ async def execute_child(
             tools,
             checkpointer=None,
             middleware=[
-                UsageBudgetMiddleware("child"),
+                ModelUsageMiddleware("child"),
                 # 新可信Child使用Guard统一计数；旧直接调用接口保留原路径，不叠加。
                 ToolGuardMiddleware(child_context.tool_registry)
                 if child_context.tool_registry is not None
-                else ChildToolBudgetMiddleware(),
+                else ToolUsageMiddleware(),
                 ToolOutputBudgetMiddleware(),
             ],
             context_schema=ChildContext,

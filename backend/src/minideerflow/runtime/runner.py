@@ -8,12 +8,10 @@ from langchain_core.language_models import BaseChatModel
 from openai import APIError, APITimeoutError
 
 from minideerflow.agents.context import AgentRunContext
-from minideerflow.agents.context_manager import ContextManager
 from minideerflow.agents.lead import build_lead_agent
 from minideerflow.agents.middleware import (
-    ChildToolBudgetMiddleware,
-    ContextCompactionMiddleware,
-    UsageBudgetMiddleware,
+    ModelUsageMiddleware,
+    ToolUsageMiddleware,
 )
 from minideerflow.agents.service import AgentExecutionError, validate_message
 from minideerflow.agents.state import P04AgentState
@@ -197,19 +195,10 @@ class RunService:
             # 3. 创建运行预算跟踪器
             tracker = RunBudgetTracker(
                 run.id,
-                RunBudget(
-                    self.settings.run_max_model_calls,
-                    self.settings.run_max_tool_calls,
-                    self.settings.run_timeout_seconds,
-                    self.settings.run_max_input_tokens_estimate,
-                ),
+                RunBudget(max_seconds=self.settings.run_timeout_seconds),
                 self.usage,
                 lambda k, p: self._emit(run.id, k, p),
             )
-            tracker.context_soft_limit = self.settings.context_soft_limit_estimate
-            tracker.context_hard_limit = self.settings.context_hard_limit_estimate
-            tracker.model_context_window_tokens = self.settings.model_context_window_tokens
-            tracker.model_output_reserve_tokens = self.settings.model_output_reserve_tokens
             await tracker.initialize()
             await self.cancellation.register(run.id, asyncio.current_task(), tracker)
             await tracker.check()
@@ -273,20 +262,12 @@ class RunService:
                     context_schema=AgentRunContext,
                     state_schema=P04AgentState if p04 else None,
                     middleware=[
-                        ContextCompactionMiddleware(
-                            ContextManager(
-                                self.settings.context_soft_limit_estimate,
-                                self.settings.context_hard_limit_estimate,
-                                tools=tools,
-                            ),
-                            lambda: self.model_factory(self.settings),
-                        ),
-                        UsageBudgetMiddleware(hard_limit=self.settings.context_hard_limit_estimate),
+                        ModelUsageMiddleware(),
                         ToolOutputBudgetMiddleware(),
                         ToolGuardMiddleware(self.tool_registry),
                     ]
                     if p04
-                    else [UsageBudgetMiddleware(), ChildToolBudgetMiddleware("parent")],
+                    else [ModelUsageMiddleware(), ToolUsageMiddleware("parent")],
                     prompt_suffix=(
                         " For complex tasks use write_todos and keep the complete plan updated. "
                         "Use task to delegate focused goals. General is offline. "
@@ -320,7 +301,7 @@ class RunService:
                     [calculate],
                     self.checkpointer,
                     context_schema=AgentRunContext,
-                    middleware=[UsageBudgetMiddleware(), ChildToolBudgetMiddleware("parent")],
+                    middleware=[ModelUsageMiddleware(), ToolUsageMiddleware("parent")],
                 )
             # 7. 执行智能体
             try:
