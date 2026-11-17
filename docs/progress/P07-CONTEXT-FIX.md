@@ -1,8 +1,8 @@
 # P07 · CONTEXT_BUDGET_EXCEEDED 专项修复｜进度
 
-> **PENDING_REVIEW（2026-11-17：A/B/C/D已实现并完成局部验证，待用户手动验收）**  
-> 分支：`fix/p07-context-budget-exceeded`，基于 `feat/p07-deep-research` 远端 HEAD `72cae512fbdb31744a63084220b84df20bf8eda6`。  
-> 任务书：[P07-CONTEXT-BUDGET-FIX.md](../tasks/P07-CONTEXT-BUDGET-FIX.md)。  
+> **PENDING_REVIEW（2026-11-17：A/B/C/D已实现并完成局部验证，待用户手动验收）**
+> 分支：`fix/p07-context-budget-exceeded`，基于 `feat/p07-deep-research` 远端 HEAD `72cae512fbdb31744a63084220b84df20bf8eda6`。
+> 任务书：[P07-CONTEXT-BUDGET-FIX.md](../tasks/P07-CONTEXT-BUDGET-FIX.md)。
 > 不改 P02–P07 已有人工审核状态；P07 仍 `PENDING_REVIEW`，本补丁修复完成后也需用户手动验证。
 
 ## 为什么需要专项修复
@@ -75,4 +75,21 @@
 - **真实模型+Mock来源分开核验**：普通合成问答SUCCEEDED，1模型/0工具，Provider输入1547/输出4，估算8719字节；精简研究SUCCEEDED，4模型/3工具（Search/Fetch/Report），Provider输入10271/输出916，估算49184字节，实际报告已保存。合计5模型、真实Provider输入11818/输出920。全程独立临时两库/Workspace，结束清理；MockTransport不出公网，不声称实际Tavily或费用账单验证。
 - `.env`只更新CONTEXT_SOFT_LIMIT_ESTIMATE=24000、CONTEXT_HARD_LIMIT_ESTIMATE=48000、RUN_MAX_INPUT_TOKENS_ESTIMATE=480000；其余内容保留，未写入密钥或猜测模型窗口，.env被Git忽略。README与前端说明已同步。原P07进度中的上一轮局部修复记录保留为历史。
 - 中文注释覆盖消息块成对边界、字节/Token版本、引用验证、摘要分块原子替换、旧SQL增列、取消语义和真实统计展示。未修改System提示词、工具描述、权限或引入另一Agent循环。
-- 未验证：真实Tavily公网来源/主张支持度、用户手动验收、PyCharm GUI/其它OS。已有FAILED/旧Checkpoint不迁移或自动重放；新建会话测试。P02–P07审核状态不变，不合并main，不进入P08。Git提交/远端交付核实后另记。
+- 未验证：真实Tavily公网来源/主张支持度、用户手动验收、PyCharm GUI/其它OS。已有FAILED/旧Checkpoint不迁移或自动重放；新建会话测试。P02–P07审核状态不变，不合并main，不进入P08。Git提交/远端交付见下方记录。
+
+## Git交付核验（2026-11-17）
+
+终端Git HTTPS连接超时，使用GitHub连接器逐对象上传，blob/tree SHA均与本地阶段内容核对一致；远端分支从方案提交`f44735815e6e2d831723ef8783d6066af5b1e2df`正常快进4次，已用compare确认ahead_by=4、behind_by=0。没有强推、改写共享历史、合并main或发送评论。
+
+| 阶段 | 本地实现提交 | GitHub交付提交（内容tree相同） |
+| --- | --- | --- |
+| A | `957bde9e3e1c604c27c908d90410ed323761c7ef` | `7e00da7c8acca7f07c41fdd1806d55a04c29134d` |
+| B | `68bc55f71ae5ab1fd9d30e278b505efdd9e79177` | `e3d3394466ab8ebb185429cd37721c0e52549cde` |
+| C | `391dc53abf41a4b598ae6aaea47e467730c76c19` | `850376dfa485cc9705749903fafe58791f49cdd7` |
+| D | `aa791d68acb4bbbb5da9dc5e7d7f938158282b4f` | `8ce99b765a666cdc5a562437cdf1838a07b16903` |
+
+连接器创建提交时使用服务端作者/时间，因此提交SHA与本地实现提交不同，代码tree完全一致。本地原实现历史保留在`local/p07-budget-implementation-20261117`备份分支；当前修复分支在核对内容后与GitHub交付历史对齐。此记录另作纯文档提交。
+
+本机8000原监听已停止，现已使用backend/.venv与新代码启动后端，启动/实际旧库幂等迁移成功，GET /health=200；加载.env的soft/hard/cumulative实际为24000/48000/480000。没有重放已有Run。最终补充35项局部测试再次通过（7.37s），14个Python文件Ruff check/format及最终diff空白检查通过。
+
+状态仍为PENDING_REVIEW；真实Tavily公网、人工验收、PyCharm GUI和其它OS未验证。所有源码/测试/文档变更扫描未包含.env真实认证值；.env/生成库/Workspace/dist仍为Git忽略内容。
