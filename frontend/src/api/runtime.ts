@@ -207,6 +207,10 @@ export type RunUsage = {
   provider_output_tokens: number | null;
   usage_unknown_calls: number;
   estimated_input_tokens: number;
+  estimated_input_tokens_v2: number | null;
+  estimated_v2_calls: number;
+  estimator_version: string | null;
+  estimated_token_unit: string;
   estimate_unit: string;
   context_breakdown: {
     system_bytes: number;

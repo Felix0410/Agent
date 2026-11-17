@@ -135,7 +135,10 @@ class ContextManager:
                     piece = piece[: len(piece) // 2]
                 if not piece:
                     raise BudgetError("CONTEXT_BUDGET_EXCEEDED", "SUMMARY_INPUT_TOO_LARGE")
-                reservation = await tracker.reserve("model", estimate_messages([prompt]), "summary")
+                estimate = tracker.estimator.estimate(
+                    [prompt], soft=self.soft, hard=self.hard, cumulative=tracker.estimated
+                )
+                reservation = await tracker.reserve_context(estimate, "summary")
                 usage, status = None, "error"
                 try:
                     response = await model_factory().ainvoke([prompt])

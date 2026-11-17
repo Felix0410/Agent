@@ -162,6 +162,21 @@ class RuntimeDatabase:
                     await self.connection.execute(
                         "ALTER TABLE usage_calls ADD COLUMN usage_source TEXT NOT NULL DEFAULT 'unknown'"
                     )
+                # v2只补nullable列，旧字节累计保持原值，不能反算成历史Token预估。
+                for table in ("run_usage", "usage_calls"):
+                    async with self.connection.execute(f"PRAGMA table_info({table})") as cursor:
+                        columns = {row["name"] for row in await cursor.fetchall()}
+                    additions = {
+                        "estimated_input_tokens_v2": "INTEGER",
+                        "estimator_version": "TEXT",
+                    }
+                    if table == "run_usage":
+                        additions["estimated_v2_calls"] = "INTEGER NOT NULL DEFAULT 0"
+                    for name, declaration in additions.items():
+                        if name not in columns:
+                            await self.connection.execute(
+                                f"ALTER TABLE {table} ADD COLUMN {name} {declaration}"
+                            )
                 await self.connection.commit()
             except BaseException:
                 await self.connection.rollback()

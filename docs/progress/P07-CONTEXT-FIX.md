@@ -50,3 +50,11 @@
 - `pytest -q tests/test_context_tool_rounds.py tests/test_context.py tests/test_budget_demo.py tests/test_research_demo.py tests/test_research_child.py tests/test_cancel_recovery.py`：**37 passed in 7.65s**；Ruff通过本次修改；前端build通过43 modules。
 - 单Human八次工具调用用soft6500/hard14000真实触发压缩且成功，Todo/current goal保留；摘要空/>2KiB/超时/外部Task取消/多批累计预算耗尽均保留旧Checkpoint。最初直接在Fake节点raise CancelledError被锁版LangGraph转换为NodeCancelledError，已改成实际外部Task.cancel验证取消链，不吞框架行为。
 - 模型与来源仍Fake，不代表公网/真实模型；真实P07报告+两个并发Child强制压缩全链在D核验。未推送，不修改用户旧Run。
+
+## C · 版本化预估与兼容旧SQL（2026-11-17）
+
+- B提交：`68bc55f`。新增ContextEstimator协议/ContextEstimate统一每请求System+Schema+消息计量，未知兼容模型采用明确标记的`utf8_conservative_v2`（每UTF-8 JSON代理字节一Token的保守预估，不使用英文4字节/Token去放宽中文输入），不声称精确Tokenizer或Provider窗口保证；原字节硬限额始终独立生效。
+- Settings可选已确认的MODEL_CONTEXT_WINDOW_TOKENS和输出预留；未知窗口不猜模型规格，已配置时同时检查保守预估+输出预留。父/Child/summary使用相同tracker预扣，累计预算仍为同单位字节预算，不拿旧版本历史跨单位比较。
+- run_usage/usage_calls幂等新增nullable v2/版本列及已覆盖调用次数，旧行保持NULL，历史estimated_input_tokens字节总量不变；Provider缺usage仍NULL、唯一ID回执去重。前端同时明确显示字节v1、保守Token预估v2及Provider真实Token。
+- `pytest -q tests/test_context_estimator.py tests/test_context_budget_fix.py tests/test_context_tool_rounds.py tests/test_budget.py tests/test_usage.py tests/test_budget_demo.py tests/test_config.py tests/test_context.py tests/test_cancel_recovery.py`：**60 passed in 7.76s**，包含实际删除新列构造旧库并迁移两次、中文/英文/长JSON、窗口拒绝、未知窗口回退及并发累计预扣。Ruff导入顺序问题已修复，format通过；前端build通过43 modules。未新增库或修改锁文件。
+- 可回退为独立C提交；旧字节列不受回退影响。本轮尚未浏览器/真实模型验收，进入D。

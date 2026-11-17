@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     run_max_model_calls: int = Field(default=40, ge=1, le=40)
     run_max_tool_calls: int = Field(default=30, ge=1, le=30)
     run_max_input_tokens_estimate: int = Field(default=480000, ge=1, le=1000000)
+    # 只有用户确认模型窗口后才配置；未知窗口继续执行字节硬保护。
+    model_context_window_tokens: int | None = Field(default=None, ge=128, le=2000000)
+    model_output_reserve_tokens: int = Field(default=2048, ge=1, le=128000)
     subagent_timeout_seconds: float = Field(default=35, gt=0, le=35)
     subagent_recursion_limit: int = Field(default=14, ge=2, le=14)
     max_subagent_concurrency: int = Field(default=3, ge=1, le=3)
@@ -68,6 +71,11 @@ class Settings(BaseSettings):
         """业务库与 Graph 库必须分开，不能误认为两者有原子事务。"""
         if self.context_soft_limit_estimate >= self.context_hard_limit_estimate:
             raise ValueError("context soft limit must be less than hard limit")
+        if (
+            self.model_context_window_tokens is not None
+            and self.model_output_reserve_tokens >= self.model_context_window_tokens
+        ):
+            raise ValueError("output reserve must be less than model context window")
         if self.runtime_db_path == self.checkpoint_db_path:
             raise ValueError("runtime and checkpoint databases must use separate files")
         if any(

@@ -13,6 +13,8 @@ class UsageCall(BaseModel):
     source: str
     usage_source: str = "unknown"
     estimated_input_tokens: int = 0
+    estimated_input_tokens_v2: int | None = None
+    estimator_version: str | None = None
     provider_input_tokens: int | None = None
     provider_output_tokens: int | None = None
     elapsed_ms: int = 0
@@ -28,6 +30,10 @@ class RunUsage(BaseModel):
     provider_output_tokens: int | None = None
     usage_unknown_calls: int = 0
     estimated_input_tokens: int = 0
+    estimated_input_tokens_v2: int | None = None
+    estimated_v2_calls: int = 0
+    estimator_version: str | None = None
+    estimated_token_unit: str = "estimated_tokens_v2"
     elapsed_ms: int = 0
     compaction_count: int = 0
     output_externalized_count: int = 0
@@ -56,7 +62,7 @@ class UsageRepository:
         async with self.database.transaction() as conn:
             await _run(conn, run_id)
             cur = await conn.execute(
-                "INSERT OR IGNORE INTO usage_calls(invocation_id,run_id,kind,source,estimated_input_tokens,status) VALUES(?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO usage_calls(invocation_id,run_id,kind,source,estimated_input_tokens,status,estimated_input_tokens_v2,estimator_version) VALUES(?,?,?,?,?,?,?,?)",
                 (
                     call.invocation_id,
                     run_id,
@@ -64,6 +70,8 @@ class UsageRepository:
                     call.source,
                     call.estimated_input_tokens,
                     "PENDING",
+                    call.estimated_input_tokens_v2,
+                    call.estimator_version,
                 ),
             )
             if cur.rowcount:
@@ -72,6 +80,11 @@ class UsageRepository:
                     f"UPDATE run_usage SET {column}={column}+1,estimated_input_tokens=estimated_input_tokens+? WHERE run_id=?",
                     (call.estimated_input_tokens, run_id),
                 )
+                if call.estimated_input_tokens_v2 is not None:
+                    await conn.execute(
+                        "UPDATE run_usage SET estimated_input_tokens_v2=COALESCE(estimated_input_tokens_v2,0)+?,estimated_v2_calls=estimated_v2_calls+1,estimator_version=? WHERE run_id=?",
+                        (call.estimated_input_tokens_v2, call.estimator_version, run_id),
+                    )
 
     async def finish(self, run_id, call: UsageCall):
         """仅第一次最终回执入账，不在stream chunk再次计费。"""

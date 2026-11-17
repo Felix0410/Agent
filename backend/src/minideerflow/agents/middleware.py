@@ -24,7 +24,7 @@ class UsageBudgetMiddleware(AgentMiddleware):
         hard = tracker.context_hard_limit
         if self.hard_limit is not None:
             hard = min(hard, self.hard_limit)
-        breakdown = budget_breakdown(
+        estimate = tracker.estimator.estimate(
             request.messages,
             request.tools,
             request.system_message,
@@ -32,6 +32,7 @@ class UsageBudgetMiddleware(AgentMiddleware):
             hard=hard,
             cumulative=tracker.estimated,
         )
+        breakdown = estimate.breakdown
         reason = "WITHIN_LIMIT"
         if breakdown.system_bytes + breakdown.tool_schema_bytes > hard:
             reason = "BASE_OVERHEAD_EXCEEDS_HARD_LIMIT"
@@ -40,9 +41,8 @@ class UsageBudgetMiddleware(AgentMiddleware):
         await tracker.record_context(breakdown, reason)
         if reason != "WITHIN_LIMIT":
             raise BudgetError("CONTEXT_BUDGET_EXCEEDED", reason)
-        estimate = breakdown.total_bytes
         # 2. 预留成功才进入官方handler，不监听chunk重复计数。
-        reserved = await tracker.reserve("model", estimate, self.source)
+        reserved = await tracker.reserve_context(estimate, self.source)
         usage = None
         status = "error"
         try:

@@ -208,6 +208,8 @@ class RunService:
             )
             tracker.context_soft_limit = self.settings.context_soft_limit_estimate
             tracker.context_hard_limit = self.settings.context_hard_limit_estimate
+            tracker.model_context_window_tokens = self.settings.model_context_window_tokens
+            tracker.model_output_reserve_tokens = self.settings.model_output_reserve_tokens
             await tracker.initialize()
             await self.cancellation.register(run.id, asyncio.current_task(), tracker)
             await tracker.check()

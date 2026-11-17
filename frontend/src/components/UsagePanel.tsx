@@ -54,6 +54,9 @@ export default function UsagePanel({
             ；UTF-8 字节近似预算（非真实Token）：{usage.estimated_input_tokens} /{" "}
             {usage.budget.max_input_tokens_estimate ?? "—"}（{usage.estimate_unit}）
           </p>
+          {usage.estimated_input_tokens_v2 !== null && (
+            <p>输入Token保守预估：{usage.estimated_input_tokens_v2}（{usage.estimated_token_unit} / {usage.estimator_version}；覆盖 {usage.estimated_v2_calls} 次调用，非Provider实际统计）</p>
+          )}
           {usage.context_breakdown && (
             <p>
               最近请求：System {usage.context_breakdown.system_bytes}；工具定义{" "}
