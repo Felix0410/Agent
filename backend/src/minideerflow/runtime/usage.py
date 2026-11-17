@@ -32,6 +32,8 @@ class RunUsage(BaseModel):
     compaction_count: int = 0
     output_externalized_count: int = 0
     budget: dict = Field(default_factory=dict)
+    estimate_unit: str = "utf8_json_bytes_v1"
+    context_breakdown: dict | None = None
 
 
 class UsageRepository:
@@ -104,6 +106,21 @@ class UsageRepository:
                 (elapsed_ms, compactions, externalized, run_id),
             )
 
+    async def context_diagnostic(self, run_id, data):
+        """追加到已有预算JSON，旧SQL列值与历史单位均不改变。"""
+        async with self.database.transaction() as conn:
+            async with conn.execute(
+                "SELECT budget_json FROM run_usage WHERE run_id=?", (run_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            if row:
+                budget = json.loads(row[0])
+                budget["context_breakdown"] = data
+                await conn.execute(
+                    "UPDATE run_usage SET budget_json=? WHERE run_id=?",
+                    (json.dumps(budget), run_id),
+                )
+
     async def get(self, run_id):
         """读取同Run权威累计，未开始时Provider数字仍为NULL。"""
         async with self.database.transaction() as conn:
@@ -115,4 +132,5 @@ class UsageRepository:
             data = dict(row)
             data["recorded"] = True
             data["budget"] = json.loads(data.pop("budget_json"))
+            data["context_breakdown"] = data["budget"].get("context_breakdown")
             return RunUsage(**data)

@@ -44,16 +44,25 @@ export default function UsagePanel({
             / {usage.budget.max_tool_calls ?? "—"}
           </p>
           <p>
-            Provider已报告输入/输出：
+            Provider已报告输入/输出（真实Token）：
             {usage.provider_input_tokens === null
               ? "未提供统计"
               : `${usage.provider_input_tokens} / ${usage.provider_output_tokens}`}
           </p>
           <p>
             未返回Provider统计的调用：{usage.usage_unknown_calls}
-            ；累计输入估算：{usage.estimated_input_tokens} /{" "}
-            {usage.budget.max_input_tokens_estimate ?? "—"}（估算，非实际计费）
+            ；UTF-8 字节近似预算（非真实Token）：{usage.estimated_input_tokens} /{" "}
+            {usage.budget.max_input_tokens_estimate ?? "—"}（{usage.estimate_unit}）
           </p>
+          {usage.context_breakdown && (
+            <p>
+              最近请求：System {usage.context_breakdown.system_bytes}；工具定义{" "}
+              {usage.context_breakdown.tool_schema_bytes}；消息{" "}
+              {usage.context_breakdown.message_bytes}；合计{" "}
+              {usage.context_breakdown.total_bytes} / {usage.context_breakdown.hard_bytes} 字节近似。
+              原因：{usage.context_breakdown.reason}
+            </p>
+          )}
           <p>
             已记录耗时：{(usage.elapsed_ms / 1000).toFixed(2)} /{" "}
             {usage.budget.max_seconds ?? "—"}秒；上下文压缩：

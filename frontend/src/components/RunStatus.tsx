@@ -58,6 +58,9 @@ export default function RunStatus({
           部分已启动操作结果未知，请检查已登记产物或外部系统；不会自动重试。
         </p>
       )}
+      {run.error_code === "CONTEXT_BUDGET_EXCEEDED" && (
+        <p role="alert">单次上下文预算不足；可在运行用量中查看分项占用。</p>
+      )}
       <ResearchPanel threadId={run.thread_id} runId={run.id} status={run.status} revision={planRevision} />
       <UsagePanel
         runId={run.id}

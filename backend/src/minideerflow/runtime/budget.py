@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import time
 from dataclasses import asdict, dataclass
 from uuid import uuid4
@@ -10,9 +11,10 @@ from minideerflow.runtime.usage import UsageCall
 
 
 class BudgetError(Exception):
-    def __init__(self, code="BUDGET_EXCEEDED"):
+    def __init__(self, code="BUDGET_EXCEEDED", reason="UNCOMPRESSIBLE"):
         super().__init__(code)
         self.code = code
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -22,11 +24,35 @@ class RunBudget:
     max_model_calls: int = 40
     max_tool_calls: int = 30
     max_seconds: float = 600
-    max_input_tokens_estimate: int = 120000
+    max_input_tokens_estimate: int = 480000
+
+
+@dataclass(frozen=True)
+class BudgetBreakdown:
+    """只含数字及版本，不保留消息、参数、URL或任何认证信息。"""
+
+    system_bytes: int
+    tool_schema_bytes: int
+    message_bytes: int
+    total_bytes: int
+    soft_bytes: int
+    hard_bytes: int
+    cumulative_bytes: int
+    estimator: str = "utf8_json_bytes_v1"
+
+
+def budget_breakdown(
+    messages, tools=(), system_message=None, *, soft=24000, hard=48000, cumulative=0
+):
+    """父/子/摘要共用同一字节口径；System和工具Schema各计一次。"""
+    system = estimate_messages([system_message]) if system_message is not None else 0
+    schema = estimate_tools(tools)
+    body = estimate_messages(messages)
+    return BudgetBreakdown(system, schema, body, system + schema + body, soft, hard, cumulative)
 
 
 def estimate_messages(messages):
-    """估算消息列表的token数"""
+    """计算UTF-8 JSON字节近似值；历史字段名含tokens，不代表真实Token。"""
     return sum(
         len(
             json.dumps(
@@ -76,10 +102,19 @@ class RunBudgetTracker:
         self.exceeded = False
         self.outcome_unknown = False
         self.cancel_check = None
-        self.context_hard_limit = 18000
+        self.context_soft_limit = 24000
+        self.context_hard_limit = 48000
 
     async def initialize(self):
-        await self.repository.start(self.run_id, asdict(self.budget))
+        await self.repository.start(
+            self.run_id, {**asdict(self.budget), "estimate_unit": "utf8_json_bytes_v1"}
+        )
+
+    async def record_context(self, breakdown, reason="WITHIN_LIMIT"):
+        """SQL保存最后一次分项，日志只记录数值和固定原因枚举。"""
+        data = {**asdict(breakdown), "phase": "before_model", "reason": reason}
+        await self.repository.context_diagnostic(self.run_id, data)
+        logging.getLogger("minideerflow.budget").info("context_budget %s", json.dumps(data))
 
     async def check(self):
         """检查状态"""

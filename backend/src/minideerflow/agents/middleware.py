@@ -4,13 +4,13 @@ import asyncio
 
 from langchain.agents.middleware import AgentMiddleware
 
-from minideerflow.runtime.budget import estimate_messages, estimate_tools
+from minideerflow.runtime.budget import BudgetError, budget_breakdown, estimate_messages
 
 
 class UsageBudgetMiddleware(AgentMiddleware):
     """统计实际模型调用，不监听token delta，避免重复入账。"""
 
-    def __init__(self, source="parent", hard_limit=18000):
+    def __init__(self, source="parent", hard_limit=None):
         self.source = source
         self.hard_limit = hard_limit
 
@@ -21,14 +21,26 @@ class UsageBudgetMiddleware(AgentMiddleware):
         tracker = getattr(context, "budget_tracker", None)
         if tracker is None:
             return await handler(request)
-        messages = list(request.messages)
-        if request.system_message:
-            messages.insert(0, request.system_message)
-        estimate = estimate_messages(messages) + estimate_tools(request.tools)
-        if estimate > min(self.hard_limit, tracker.context_hard_limit):
-            from minideerflow.runtime.budget import BudgetError
-
-            raise BudgetError("CONTEXT_BUDGET_EXCEEDED")
+        hard = tracker.context_hard_limit
+        if self.hard_limit is not None:
+            hard = min(hard, self.hard_limit)
+        breakdown = budget_breakdown(
+            request.messages,
+            request.tools,
+            request.system_message,
+            soft=tracker.context_soft_limit,
+            hard=hard,
+            cumulative=tracker.estimated,
+        )
+        reason = "WITHIN_LIMIT"
+        if breakdown.system_bytes + breakdown.tool_schema_bytes > hard:
+            reason = "BASE_OVERHEAD_EXCEEDS_HARD_LIMIT"
+        elif breakdown.total_bytes > hard:
+            reason = "ACTIVE_MESSAGES"
+        await tracker.record_context(breakdown, reason)
+        if reason != "WITHIN_LIMIT":
+            raise BudgetError("CONTEXT_BUDGET_EXCEEDED", reason)
+        estimate = breakdown.total_bytes
         # 2. 预留成功才进入官方handler，不监听chunk重复计数。
         reserved = await tracker.reserve("model", estimate, self.source)
         usage = None

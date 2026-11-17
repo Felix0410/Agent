@@ -1,6 +1,6 @@
 # P07 · CONTEXT_BUDGET_EXCEEDED 专项修复｜进度
 
-> **PLAN_READY（2026-11-17：仅设计、无修复业务代码、无本次测试结果）**  
+> **IN_PROGRESS（2026-11-17：A已完成局部验证，B/C/D实施中）**  
 > 分支：`fix/p07-context-budget-exceeded`，基于 `feat/p07-deep-research` 远端 HEAD `72cae512fbdb31744a63084220b84df20bf8eda6`。  
 > 任务书：[P07-CONTEXT-BUDGET-FIX.md](../tasks/P07-CONTEXT-BUDGET-FIX.md)。  
 > 不改 P02–P07 已有人工审核状态；P07 仍 `PENDING_REVIEW`，本补丁修复完成后也需用户手动验证。
@@ -33,3 +33,11 @@
 3. 使用低阈值隔离Fake实测在**单一Human轮次内**压缩过去已完成工具批次，Graph/ToolMessage/Todo与真实Evidence ID都完好。
 4. 确认子代理父Run共享预算、不重复统计；累计预算不足时仍然明确停止。
 5. 页面显示估算单位和Provider真实统计分开，刷新/取消/重启与文件下载仍正确。
+
+## A · 统一字节预算与脱敏诊断（2026-11-17）
+
+- 基线为GitHub方案原始提交`f44735815e6e2d831723ef8783d6066af5b1e2df`。终端git fetch超时，通过GitHub连接器读取Git数据，逐个校验4个commit/tree/blob SHA后导入同一原始历史；没有改写远端或覆盖未提交修改。上一轮预览修复原样保留，临时备份`/tmp/minideerflow-budget-before-plan.patch`，不含.env。
+- 原失败Run数值诊断：四条消息12554字节近似、公开工具Schema7568，两次工具结果7351/4032 bytes；该例是同Run中小回执合计超限，不是模型Provider窗口错误。
+- 修改config/budget/usage/runner/context_manager/middleware/lead、.env.example、UsagePanel/RunStatus/runtime类型、新test_context_budget_fix。默认soft24000/hard48000/cumulative480000，父子不再隐含18k；System与Schema各计一次，过大固定开销不调用摘要。SQL预算JSON保存最后分项，仅数值、版本和枚举。旧estimated_input_tokens列仍为字节近似，不改历史含义。
+- 局部：`pytest -q tests/test_context_budget_fix.py tests/test_config.py tests/test_budget.py tests/test_usage.py tests/test_context.py tests/test_budget_demo.py tests/test_research_tools.py tests/test_subagents.py`，**57 passed in 2.53s**；本次核心修改Ruff check/format通过，`npm run build`通过43 modules。Fake模型/Provider，不代表公网验收；不升级依赖。
+- UI同步真实Token/字节近似单位、请求分项及预算错误说明；A不宣称已解决同Run压缩。提交SHA后续记录；未推送、尚未浏览器手测、未自动合并。

@@ -206,6 +206,7 @@ class RunService:
                 self.usage,
                 lambda k, p: self._emit(run.id, k, p),
             )
+            tracker.context_soft_limit = self.settings.context_soft_limit_estimate
             tracker.context_hard_limit = self.settings.context_hard_limit_estimate
             await tracker.initialize()
             await self.cancellation.register(run.id, asyncio.current_task(), tracker)

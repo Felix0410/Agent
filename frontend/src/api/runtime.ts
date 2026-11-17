@@ -207,10 +207,25 @@ export type RunUsage = {
   provider_output_tokens: number | null;
   usage_unknown_calls: number;
   estimated_input_tokens: number;
+  estimate_unit: string;
+  context_breakdown: {
+    system_bytes: number;
+    tool_schema_bytes: number;
+    message_bytes: number;
+    total_bytes: number;
+    soft_bytes: number;
+    hard_bytes: number;
+    reason: string;
+  } | null;
   elapsed_ms: number;
   compaction_count: number;
   output_externalized_count: number;
-  budget: Record<string, number>;
+  budget: Record<string, unknown> & {
+    max_model_calls?: number;
+    max_tool_calls?: number;
+    max_input_tokens_estimate?: number;
+    max_seconds?: number;
+  };
 };
 export const getUsage = (runId: string): Promise<RunUsage> =>
   request(`/api/runs/${encodeURIComponent(runId)}/usage`);

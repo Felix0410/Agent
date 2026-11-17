@@ -4,13 +4,20 @@ import re
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from minideerflow.runtime.budget import BudgetError, estimate_messages, estimate_tools
+from minideerflow.runtime.budget import (
+    BudgetError,
+    budget_breakdown,
+    estimate_messages,
+    estimate_tools,
+)
 
 
 class ContextManager:
     """保留最近至少六条及最新用户目标，未配对回合绝不删除。"""
 
-    def __init__(self, soft=12000, hard=18000, tools=()):
+    def __init__(self, soft=24000, hard=48000, tools=()):
+        self.tools = tools
+        self.system_message = None
         self.tool_estimate = estimate_tools(tools)
         self.soft = soft
         self.hard = hard
@@ -95,13 +102,27 @@ class ContextManager:
 
     async def prepare(self, messages, context, model_factory):
         """1. 阈值检查；2. 完整回合摘要；3. 硬上限复核后才返回替换。"""
-        before = estimate_messages(messages) + self.tool_estimate
+        breakdown = budget_breakdown(
+            messages,
+            self.tools,
+            self.system_message,
+            soft=self.soft,
+            hard=self.hard,
+            cumulative=context.budget_tracker.estimated,
+        )
+        before = breakdown.total_bytes
+        if breakdown.system_bytes + breakdown.tool_schema_bytes > self.hard:
+            await context.budget_tracker.record_context(
+                breakdown, "BASE_OVERHEAD_EXCEEDS_HARD_LIMIT"
+            )
+            raise BudgetError("CONTEXT_BUDGET_EXCEEDED", "BASE_OVERHEAD_EXCEEDS_HARD_LIMIT")
         if before <= self.soft:
             return None
         old, keep = self.partition(messages)
         if not old:
             if before > self.hard:
-                raise BudgetError("CONTEXT_BUDGET_EXCEEDED")
+                await context.budget_tracker.record_context(breakdown, "UNCOMPRESSIBLE")
+                raise BudgetError("CONTEXT_BUDGET_EXCEEDED", "UNCOMPRESSIBLE")
             return None
         summary, refs = await self.build_summary(old, context, model_factory)
         anchor = HumanMessage(
@@ -111,6 +132,6 @@ class ContextManager:
             + ", ".join(refs)
         )
         compacted = [anchor, *keep]
-        if estimate_messages(compacted) + self.tool_estimate > self.hard:
+        if estimate_messages(compacted) + self.tool_estimate + breakdown.system_bytes > self.hard:
             raise BudgetError("CONTEXT_BUDGET_EXCEEDED")
         return compacted, summary, before
