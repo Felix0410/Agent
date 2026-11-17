@@ -148,7 +148,9 @@ def test_same_human_stream_compaction_keeps_full_trace_and_todos(tmp_path):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("failure", ["empty", "large", "timeout", "cancel", "budget"])
+@pytest.mark.parametrize(
+    "failure", ["empty", "large", "timeout", "cancel", "budget", "invalid_call"]
+)
 def test_summary_failure_keeps_original_checkpoint(tmp_path, failure):
     async def scenario():
         async with workspace(tmp_path) as (ws, repo, _):
@@ -172,6 +174,18 @@ def test_summary_failure_keeps_original_checkpoint(tmp_path, failure):
                     if failure == "cancel":
                         started.set()
                         await asyncio.Event().wait()
+                    if failure == "invalid_call":
+                        return AIMessage(
+                            content="untrusted",
+                            invalid_tool_calls=[
+                                {
+                                    "name": "unknown",
+                                    "args": "invalid json",
+                                    "id": "bad",
+                                    "error": "invalid",
+                                }
+                            ],
+                        )
                     return AIMessage(
                         content=""
                         if failure == "empty"
@@ -209,5 +223,30 @@ def test_summary_failure_keeps_original_checkpoint(tmp_path, failure):
                 len(messages[0].content.split("Fragment:\n", 1)[1].encode()) <= 8192
                 for messages in seen
             )
+            if failure == "cancel":
+                async with (
+                    repo.database.transaction() as conn,
+                    conn.execute("SELECT status FROM usage_calls WHERE source='summary'") as cursor,
+                ):
+                    assert (await cursor.fetchone())[0] == "cancelled"
+
+    asyncio.run(scenario())
+
+
+def test_oversized_recent_tool_batch_is_never_summarized(tmp_path):
+    async def scenario():
+        async with workspace(tmp_path) as (ws, repo, _):
+            thread = await repo.create_thread()
+            run = await active_run(repo, thread)
+            tracker = RunBudgetTracker(run.id, RunBudget(), UsageRepository(repo.database))
+            await tracker.initialize()
+            ctx = AgentRunContext(thread.id, run.id, ws, None, budget_tracker=tracker)
+            original = rounds(1, 6000)
+            with pytest.raises(BudgetError) as error:
+                await ContextManager(1000, 5000).prepare(
+                    original, ctx, lambda: pytest.fail("no safe prefix")
+                )
+            assert error.value.reason == "UNCOMPRESSIBLE"
+            assert original[0].content == "CURRENT_GOAL" and tracker.model_calls == 0
 
     asyncio.run(scenario())

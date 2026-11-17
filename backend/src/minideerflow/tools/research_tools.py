@@ -15,6 +15,54 @@ from minideerflow.tools.registry import ToolDefinition, ToolPolicy
 from minideerflow.workspace.models import WorkspaceContext
 
 
+def _evidence_previews(records, *, include_excerpt=False):
+    """限制一次研究回执为3 KiB；保留全部证据ID，完整记录仍由SQL/API提供。"""
+    fields = {"id", "title", "url", "source_status", "snippet", "searched_at"}
+    if include_excerpt:
+        fields = set(type(records[0]).model_fields) - {"snippet"}
+    payload = [item.model_dump(mode="json", include=fields) for item in records]
+    # 中文按字符截断仍可能膨胀三倍；按UTF-8字节控制预览，给后续取文留空间。
+    for item in payload:
+        for field, limit in (("title", 90), ("snippet", 120), ("excerpt", 768)):
+            if field in item and len(item[field].encode("utf-8")) > limit:
+                item[field] = item[field].encode("utf-8")[:limit].decode("utf-8", errors="ignore")
+                item["preview_only"] = True
+
+    def size(value):
+        return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+
+    if any(item.get("preview_only") for item in payload):
+        payload[0]["notice"] = (
+            "Preview only. Omitted metadata and full text remain in this run's research evidence API."
+        )
+    if size(payload) <= 3072:
+        return payload
+    # 1. 两个并行搜索的小回执也可能合计超限，不能只依赖12 KiB单结果外置。
+    # 每条先保留真实ID/等级；首条说明省略语义，避免模型把预览当成完整证据。
+    previews = [{"id": item["id"], "source_status": item["source_status"]} for item in payload]
+    previews[0]["notice"] = (
+        "Preview only. Omitted metadata and full text remain in this run's research evidence API."
+    )
+    remaining = 3072 - size(previews)
+    # 2. 平分剩余字节，URL只完整保留，文本按序缩短；不改变数据库中的原始记录。
+    allowance = remaining // len(previews)
+    for original, preview in zip(payload, previews, strict=True):
+        limit = size(preview) + allowance
+        for field in ("url", "title", "snippet", "excerpt"):
+            if field not in original:
+                continue
+            value = original[field]
+            while value:
+                candidate = {**preview, field: value}
+                if size(candidate) <= limit:
+                    preview[field] = value
+                    break
+                if field == "url":
+                    break
+                value = value[: len(value) // 2]
+    return previews
+
+
 async def _context(runtime, name):
     context = runtime.context
     if (
@@ -43,10 +91,9 @@ async def _invoke(runtime, name, operation):
                 "source_ids": [item.id for item in result.citations],
             }
         elif isinstance(result, list):
-            fields = {"id", "title", "url", "source_status", "snippet", "searched_at"}
-            payload = [item.model_dump(mode="json", include=fields) for item in result]
+            payload = _evidence_previews(result)
         else:
-            payload = result.model_dump(mode="json", exclude={"snippet"})
+            payload = _evidence_previews([result], include_excerpt=True)[0]
         return json.dumps(payload, ensure_ascii=False)
     except BudgetError:
         raise

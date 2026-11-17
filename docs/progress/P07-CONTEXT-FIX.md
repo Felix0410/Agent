@@ -1,26 +1,26 @@
 # P07 · CONTEXT_BUDGET_EXCEEDED 专项修复｜进度
 
-> **IN_PROGRESS（2026-11-17：A已完成局部验证，B/C/D实施中）**  
+> **PENDING_REVIEW（2026-11-17：A/B/C/D已实现并完成局部验证，待用户手动验收）**  
 > 分支：`fix/p07-context-budget-exceeded`，基于 `feat/p07-deep-research` 远端 HEAD `72cae512fbdb31744a63084220b84df20bf8eda6`。  
 > 任务书：[P07-CONTEXT-BUDGET-FIX.md](../tasks/P07-CONTEXT-BUDGET-FIX.md)。  
 > 不改 P02–P07 已有人工审核状态；P07 仍 `PENDING_REVIEW`，本补丁修复完成后也需用户手动验证。
 
 ## 为什么需要专项修复
 
-用户实测一个问题就发生 `CONTEXT_BUDGET_EXCEEDED`。代码静态核验确认：消息/工具以 UTF-8 JSON字节计入所谓“Token”估算，默认soft=12k/hard=18k；父代码可接配置而child `UsageBudgetMiddleware` 内还有固定18k限制；ContextManager只能在有先前完整用户回合时摘要，当前复杂P07一个Human下多组工具消息不能安全分段；另有Run累计估算120k独立上限。尚无用户真实失败Run日志，因此未知哪一项首先触发。
+用户实测一个问题就发生 `CONTEXT_BUDGET_EXCEEDED`。代码静态核验确认：消息/工具以 UTF-8 JSON字节计入所谓“Token”估算，默认soft=12k/hard=18k；父代码可接配置而child `UsageBudgetMiddleware` 内还有固定18k限制；ContextManager只能在有先前完整用户回合时摘要，当前复杂P07一个Human下多组工具消息不能安全分段；另有Run累计估算120k独立上限。设计阶段尚无失败Run日志；本次本机数值诊断见A记录。
 
 ## 任务状态
 
 | 任务 | 计划产物 | 真实状态 |
 |---|---|---|
-| A · 诊断与温和上调 | 请求成本细分/安全日志、父子一致阈值、前端明确单位、字节近似soft24k/hard48k/cumulative480k | TODO，没有代码/测试 |
-| B · 同一用户问题内已完成Tool批次压缩 | 安全完整tool_call_id配对、保留当前目标与Todo/Evidence、分块摘要、Checkpoint/ToolTrace回归 | TODO，没有代码/测试 |
-| C · 统一计数与版本化Token估算 | Provider Token vs token estimate vs 历史字节分列、窗口保守检查、兼容旧SQLite/Usage | TODO，没有代码/测试 |
-| D · 长研究全链路与前端回归 | Fake低阈值真压缩、普通问答、Child并发、取消、Artifact下载、真实模型可用时低成本Smoke | TODO，没有代码/测试 |
+| A · 诊断与温和上调 | 请求成本细分/安全日志、父子一致阈值、前端明确单位、字节近似soft24k/hard48k/cumulative480k | PENDING_REVIEW，真实结果见下方记录 |
+| B · 同一用户问题内已完成Tool批次压缩 | 安全完整tool_call_id配对、保留当前目标与Todo/Evidence、分块摘要、Checkpoint/ToolTrace回归 | PENDING_REVIEW，真实结果见下方记录 |
+| C · 统一计数与版本化Token估算 | Provider Token vs token estimate vs 历史字节分列、窗口保守检查、兼容旧SQLite/Usage | PENDING_REVIEW，真实结果见下方记录 |
+| D · 长研究全链路与前端回归 | Fake低阈值真压缩、普通问答、Child并发、取消、Artifact下载、真实模型可用时低成本Smoke | PENDING_REVIEW，真实结果见下方记录 |
 
 ## 设计已核对的真实文件
 
-`backend/src/minideerflow/runtime/budget.py`、`agents/{middleware,context_manager,state}.py`、`runtime/{runner,usage,streaming}.py`、`agents/subagents/executor.py`、`tools/output_budget.py`、`config.py`、P06已有context/budget测试、P07研究Demo及React UsagePanel/RunStatus。仍保留P07研究证据真实ID/下载、P06取消/预算、P05 ToolGuard/Skills和P04 Todo/Child。新分支目前**只有设计文档**；没有独立执行项目的pytest、Ruff、前端构建或本地问题重现。
+`backend/src/minideerflow/runtime/budget.py`、`agents/{middleware,context_manager,state}.py`、`runtime/{runner,usage,streaming}.py`、`agents/subagents/executor.py`、`tools/output_budget.py`、`config.py`、P06已有context/budget测试、P07研究Demo及React UsagePanel/RunStatus。仍保留P07研究证据真实ID/下载、P06取消/预算、P05 ToolGuard/Skills和P04 Todo/Child。方案提交当时只有设计文档；本次独立执行结果见下方A/B/C/D记录。
 
 ## 实施时记录规范
 
@@ -58,3 +58,21 @@
 - run_usage/usage_calls幂等新增nullable v2/版本列及已覆盖调用次数，旧行保持NULL，历史estimated_input_tokens字节总量不变；Provider缺usage仍NULL、唯一ID回执去重。前端同时明确显示字节v1、保守Token预估v2及Provider真实Token。
 - `pytest -q tests/test_context_estimator.py tests/test_context_budget_fix.py tests/test_context_tool_rounds.py tests/test_budget.py tests/test_usage.py tests/test_budget_demo.py tests/test_config.py tests/test_context.py tests/test_cancel_recovery.py`：**60 passed in 7.76s**，包含实际删除新列构造旧库并迁移两次、中文/英文/长JSON、窗口拒绝、未知窗口回退及并发累计预扣。Ruff导入顺序问题已修复，format通过；前端build通过43 modules。未新增库或修改锁文件。
 - 可回退为独立C提交；旧字节列不受回退影响。本轮尚未浏览器/真实模型验收，进入D。
+
+## D · 研究全链、浏览器和真实模型核验（2026-11-17）
+
+- C提交：`391dc53`。新增test_context_research_flow，以MockTransport执行固定Tavily API真实请求转换，Fake模型驱动单Human→Todo→Skill目录/读取→Search→Fetch→两个并发Research Child→两轮Evidence→真实报告Artifact→Todo完成；默认预算和人为soft12000/hard24000均成功，低阈值确实触发本轮压缩。15条真实合成证据/3条EXTRACTED、两个Child COMPLETED、完整11条父ToolTrace；父11+子6+摘要逐次计数，无重复账。
+- 保留并纳入上一轮研究回执预览修复及测试：按UTF-8缩短title/snippet/excerpt、单回执最多3KiB；全部证据ID/等级保留，超长URL不伪造或截成假地址，完整记录仍在SQL/API。通用12KiB外置及Child写权限不变。补齐摘要invalid Tool Call拒绝、取消调用记为cancelled、最近不可压缩工具批次保守失败。
+- 直接相关回归命令（backend，未跑P08/P09）：
+
+```bash
+.venv/bin/pytest -q tests/test_context_budget_fix.py tests/test_context_tool_rounds.py tests/test_context_estimator.py tests/test_context_research_flow.py tests/test_budget.py tests/test_usage.py tests/test_budget_demo.py tests/test_context.py tests/test_output_budget.py tests/test_cancel_recovery.py tests/test_runner.py tests/test_repository.py tests/test_runs_api.py tests/test_task_registry.py tests/test_tasks_api.py tests/test_events.py tests/test_todos.py tests/test_subagents.py tests/test_tool_guard.py tests/test_planning_demo.py tests/test_tools_demo.py tests/test_mcp.py tests/test_skills.py tests/test_file_tools.py tests/test_files_api.py tests/test_workspace.py tests/test_config.py tests/test_checkpoint.py tests/test_research_tools.py tests/test_research_child.py tests/test_research_demo.py tests/test_research_report.py
+```
+
+- **336 passed in25.60s**。随后针对摘要invalid Tool Call、取消记账、不可压缩近期工具批次补充变更，局部`test_context_tool_rounds/test_context/test_context_estimator/test_context_research_flow/test_cancel_recovery`：**35 passed in7.50s**。最终本次14个Python文件Ruff check/format通过；uv lock --check通过78依赖；前端build通过43 modules，无新依赖/锁变化。各次数字有重叠，不累加为测试总量。
+- ego-browser TaskSpace1，隔离8017、临时两库/Workspace、前端生产构建，用户原服务未修改。浏览器Run `edfd964c-d30c-45f9-b265-d19cfea9d874` SUCCEEDED，24模型/15工具、7次本轮压缩、累计196968字节近似；Provider统计为未知。页面明确显示字节v1/Token保守预估v2/Provider真实Token、分项及7次压缩；刷新重新选择会话后数字一致。两个Child和Todo完成，15条来源可查。
+- 报告页面查看1371 bytes，浏览器下载与HTTP下载相同，SHA256 `9be5cfb55b1497d1ef5ac7c7e20ed2dcda3a38344843c44a255e50a776d237d7`。MutationObserver实际观察“正在取消”后CANCELLED，旧会话需恢复，不自动重放。SQL重开后来源/Usage/Artifact字节恢复另有HTTP测试。页面截图`/tmp/minideerflow-budget-usage.png`已实际查看；报告/脚本也在/tmp，不进入Git。TaskSpace已finish，隔离服务已关闭、临时库/Workspace清理。Ego Lite提示有更新，本次未升级。
+- **真实模型+Mock来源分开核验**：普通合成问答SUCCEEDED，1模型/0工具，Provider输入1547/输出4，估算8719字节；精简研究SUCCEEDED，4模型/3工具（Search/Fetch/Report），Provider输入10271/输出916，估算49184字节，实际报告已保存。合计5模型、真实Provider输入11818/输出920。全程独立临时两库/Workspace，结束清理；MockTransport不出公网，不声称实际Tavily或费用账单验证。
+- `.env`只更新CONTEXT_SOFT_LIMIT_ESTIMATE=24000、CONTEXT_HARD_LIMIT_ESTIMATE=48000、RUN_MAX_INPUT_TOKENS_ESTIMATE=480000；其余内容保留，未写入密钥或猜测模型窗口，.env被Git忽略。README与前端说明已同步。原P07进度中的上一轮局部修复记录保留为历史。
+- 中文注释覆盖消息块成对边界、字节/Token版本、引用验证、摘要分块原子替换、旧SQL增列、取消语义和真实统计展示。未修改System提示词、工具描述、权限或引入另一Agent循环。
+- 未验证：真实Tavily公网来源/主张支持度、用户手动验收、PyCharm GUI/其它OS。已有FAILED/旧Checkpoint不迁移或自动重放；新建会话测试。P02–P07审核状态不变，不合并main，不进入P08。Git提交/远端交付核实后另记。

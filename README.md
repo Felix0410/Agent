@@ -461,12 +461,15 @@ PyCharm继续使用`backend/.venv/bin/python`、`backend/src`为Sources Root，�
 
 真实`deepseek-flash`工具调用另行成功：5次模型调用、5次工具，Provider输入11618/输出696 tokens、约7.55秒，1407-byte报告。**此模型测试的搜索提供方明确为Fake，不是公网研究。** 本机无Tavily Key，真实Search/Extract为`NOT_RUN_EXTERNAL_DEPENDENCY`；未查询模型账单金额或Tavily费用。用户提供配置后仍需手动核验真实公网来源。其它OS/PyCharm GUI/真实联网Research Child尚未验证；不进入P08。
 
-## P07 CONTEXT_BUDGET_EXCEEDED 专项修复（设计就绪，未编码）
+## P07 CONTEXT_BUDGET_EXCEEDED 专项修复（PENDING_REVIEW）
 
-用户发现单个复杂问题就报 `CONTEXT_BUDGET_EXCEEDED`。已在 `fix/p07-context-budget-exceeded` 分支提交 [逐文件修复合同](docs/tasks/P07-CONTEXT-BUDGET-FIX.md) 和 [修复独立进度](docs/progress/P07-CONTEXT-FIX.md)；**当前只写了设计，没有运行/修复新业务代码，也没有新通过测试**。
+已按 [专项合同](docs/tasks/P07-CONTEXT-BUDGET-FIX.md) 完成A/B/C/D实现，真实命令、阶段提交和验证边界见 [独立进度](docs/progress/P07-CONTEXT-FIX.md)。P02–P07原人工验收状态不变，不进入P08。
 
-根因候选已从 P07 源码核对：现有“估算 Token”实为UTF-8 JSON字节（默认soft12k/hard18k）；Child固定18k；`ContextManager.partition` 只能按旧用户回合压缩，而Deep Research常在**同一次用户问题**内累积多次完整ToolCall；Run还有累计120k字节近似估算保护。没有用户报错Run的实际占用数字时，不能推断哪个条件先发生。
+- 当前默认单次soft24000/hard48000、Run累计480000，单位是 **UTF-8 JSON字节近似**；40模型/30工具/600秒及Child35秒保持。父/子/摘要共用同一Tracker；System、消息和公开工具Schema采用统一分项口径，固定开销超限时不盲目摘要。旧P06/P07交付记录中的12k/18k/120k是当时基线。
+- 同一问题中可以压缩较早的已完成工具批次；并行Tool Call全部到齐后才可整体处理。保留原始用户目标、最近至少六条完整消息、Todo和服务器校验的引用。摘要按最多8KiB原历史数据片段滚动生成、结果最多2KiB；失败/取消/超预算不半写替换Checkpoint。业务Run历史、ToolTrace、证据和Artifact保留。
+- UsagePanel区分`utf8_json_bytes_v1`、`estimated_tokens_v2 / utf8_conservative_v2`保守预估和Provider真实Token，显示分项及本轮工具历史压缩次数。未知兼容模型以每代理字节一Token做保守预估，不声称精确Tokenizer；旧SQL新v2列保持NULL，不重新解释旧字节记录。
+- 可选`MODEL_CONTEXT_WINDOW_TOKENS`只在确认实际模型规格后填写，配合`MODEL_OUTPUT_RESERVE_TOKENS`检查；未配置时不猜测窗口，字节硬保护持续生效。研究工具仅向模型返回有界预览，完整来源仍可从页面/API查询；通用长输出12KiB外置规则不变。
 
-修复顺序：**A** 脱敏成本分解日志/父子配置一致、字节预算soft24k/hard48k/累计480k（仍需根据实际模型窗口判断是否适用）→ **B** 只压缩当前Run内已完成且成对的旧工具批次，保留用户目标/Todo/真实EvidenceID/最近消息和Graph状态，摘要按预算分块 → **C** 区分旧字节代理估算、版本化Token估算及Provider真实usage，不能将已有SQL历史数据重新解释 → **D** 用低阈值Fake真实Graph测试压缩、普通问答/研究报告、子代理、取消/刷新与前端提示。不通过工具ID配对、证据引用、预算准确性/恢复测试时停止，不自动进入P08。
+更新代码/根`.env`后重启后端，再新建会话测试。已FAILED的Run不原地盲重放；旧Checkpoint不自动迁移或清理。PyCharm继续使用`backend/.venv/bin/python`及`backend/src/minideerflow/main.py`。本机`.env`只更新三个数值预算，凭据未改，不提交Git。
 
-P07原业务与P02–P07 `PENDING_REVIEW` 均不变。本修复可以先执行A止血，再做B的根治；不建议只无限调大限制。
+局部验证：336项直接影响回归通过；随后摘要invalid Tool Call/取消记账及不可压缩近期工具批次补验35项通过。Ruff/format、uv锁检查、前端构建通过。真实浏览器在隔离Fake服务确认本轮7次压缩、单位/刷新/报告查看下载和取消。真实模型另完成普通问答及使用Mock来源的精简研究报告（5次模型调用，Provider输入11818/输出920 Token）；**不是实际Tavily公网验收**。真实公网来源支持度、用户手动验收、PyCharm GUI和其它OS尚未验证。

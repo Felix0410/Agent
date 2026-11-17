@@ -1,5 +1,6 @@
 """按完整用户回合分区，摘要只作为历史数据，不能替代当前目标或授权。"""
 
+import asyncio
 import json
 import re
 
@@ -144,9 +145,17 @@ class ContextManager:
                     response = await model_factory().ainvoke([prompt])
                     usage = response.usage_metadata
                     text = response.text.strip()
-                    if not text or len(text.encode("utf-8")) > 2048 or response.tool_calls:
+                    if (
+                        not text
+                        or len(text.encode("utf-8")) > 2048
+                        or response.tool_calls
+                        or response.invalid_tool_calls
+                    ):
                         raise BudgetError("CONTEXT_BUDGET_EXCEEDED", "INVALID_SUMMARY")
                     status = "ok"
+                except asyncio.CancelledError:
+                    status = "cancelled"
+                    raise
                 finally:
                     await tracker.finish(reservation, status, usage)
                 offset += len(piece.encode("utf-8"))
