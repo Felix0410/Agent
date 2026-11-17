@@ -461,7 +461,7 @@ PyCharm继续使用`backend/.venv/bin/python`、`backend/src`为Sources Root，�
 
 真实`deepseek-flash`工具调用另行成功：5次模型调用、5次工具，Provider输入11618/输出696 tokens、约7.55秒，1407-byte报告。**此模型测试的搜索提供方明确为Fake，不是公网研究。** 本机无Tavily Key，真实Search/Extract为`NOT_RUN_EXTERNAL_DEPENDENCY`；未查询模型账单金额或Tavily费用。用户提供配置后仍需手动核验真实公网来源。其它OS/PyCharm GUI/真实联网Research Child尚未验证；不进入P08。
 
-## P07 CONTEXT_BUDGET_EXCEEDED 专项修复（PENDING_REVIEW）
+## P07 字节预算专项修复（历史方案，已由下节原生摘要替代）
 
 已按 [专项合同](docs/tasks/P07-CONTEXT-BUDGET-FIX.md) 完成A/B/C/D实现，真实命令、阶段提交和验证边界见 [独立进度](docs/progress/P07-CONTEXT-FIX.md)。P02–P07原人工验收状态不变，不进入P08。
 
@@ -473,3 +473,25 @@ PyCharm继续使用`backend/.venv/bin/python`、`backend/src`为Sources Root，�
 更新代码/根`.env`后重启后端，再新建会话测试。已FAILED的Run不原地盲重放；旧Checkpoint不自动迁移或清理。PyCharm继续使用`backend/.venv/bin/python`及`backend/src/minideerflow/main.py`。本机`.env`只更新三个数值预算，凭据未改，不提交Git。
 
 局部验证：336项直接影响回归通过；随后摘要invalid Tool Call/取消记账及不可压缩近期工具批次补验35项通过。Ruff/format、uv锁检查、前端构建通过。真实浏览器在隔离Fake服务确认本轮7次压缩、单位/刷新/报告查看下载和取消。真实模型另完成普通问答及使用Mock来源的精简研究报告（5次模型调用，Provider输入11818/输出920 Token）；**不是实际Tavily公网验收**。真实公网来源支持度、用户手动验收、PyCharm GUI和其它OS尚未验证。
+
+## P07 原生自动摘要重构（PENDING_REVIEW）
+
+本轮按 [原生摘要合同](docs/tasks/P07-NATIVE-SUMMARIZATION.md) 实施；逐项证据和Git交付见 [独立进度](docs/progress/P07-NATIVE-SUMMARIZATION.md)。以DeerFlow v2.0.0与锁版LangChain 1.4.9为基线，直接使用官方SummarizationMiddleware。删除自写ContextManager及“最近六条”硬保留算法，**模型40次、工具30次、单次48k/累计480k字节不再构成执行许可**；旧Run的v1/v2列仍可查，不修改历史含义。
+
+新Run在同一Thread从Checkpoint恢复消息，由官方处理摘要分区、Tool Call配对和滚动替换；无需每几轮手动新建会话。模型、工具和摘要仅观察真实调用/Provider usage，摘要不进入用户回答流。原有Run600秒、Child35秒、图递归保护、文件隔离、ToolGuard、研究Search6/Extract8配额、取消和OUTCOME_UNKNOWN仍保留；真实模型窗口不足、摘要失败和循环达到上限有各自的错误说明。
+
+根`.env`自动加载，当前默认（未知模型窗口时的可调近似触发值，不是模型精确窗口或调用额度）：
+
+```dotenv
+SUMMARIZATION_ENABLED=true
+SUMMARIZATION_TRIGGER_TOKENS=6000
+SUMMARIZATION_TRIGGER_MESSAGES=24
+SUMMARIZATION_KEEP_MESSAGES=8
+SUMMARIZATION_TRIM_TOKENS=4000
+```
+
+达到Token或消息阈值之一时，官方中间件在可安全分区时摘要。KEEP保留近期消息，工具配对可能扩大保留范围；TRIM是官方摘要输入裁剪目标。已确认模型容量时，可选MODEL_CONTEXT_WINDOW_TOKENS用于更早触发摘要，未知时不要填写猜测值。旧CONTEXT_SOFT/HARD_LIMIT_ESTIMATE、RUN_MAX_MODEL/TOOL_CALLS、RUN_MAX_INPUT_TOKENS_ESTIMATE及MODEL_OUTPUT_RESERVE_TOKENS不再用于执行配置。
+
+更新代码/`.env`后重启你的后端，PyCharm使用`backend/.venv/bin/python`、入口`backend/src/minideerflow/main.py`，工作目录`backend`。验证进程结束后8000端口保持空闲，避免重复启动冲突。原SQLite/Checkpoint未清理；旧FAILED Run不自动重放写操作。UsagePanel显示真实调用、Provider Token、摘要次数/设置/消息数变化，历史字节诊断明确标注为历史，不展示新Run“最大字节额度”。
+
+本轮局部326项回归通过，Ruff/format、uv锁检查、前端build通过。Fake+MockTransport以同一实际Thread连续15问（首问复杂研究，混合追问/计算/Skill/再次研究），第二问首次模型调用前已摘要；应用重开后第16问成功。浏览器跨进程重启与真实模型合成材料Smoke证据见独立进度，分别标注Fake/Provider，不将合成来源当作真实公网。真实Tavily公网、模型窗口规格、人工审核、PyCharm GUI及其它OS仍未验证。

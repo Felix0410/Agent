@@ -93,3 +93,7 @@
 本机8000原监听已停止，现已使用backend/.venv与新代码启动后端，启动/实际旧库幂等迁移成功，GET /health=200；加载.env的soft/hard/cumulative实际为24000/48000/480000。没有重放已有Run。最终补充35项局部测试再次通过（7.37s），14个Python文件Ruff check/format及最终diff空白检查通过。
 
 状态仍为PENDING_REVIEW；真实Tavily公网、人工验收、PyCharm GUI和其它OS未验证。所有源码/测试/文档变更扫描未包含.env真实认证值；.env/生成库/Workspace/dist仍为Git忽略内容。
+
+## 后续替代方案
+
+本页为字节预算修复的历史交付记录。用户后续批准移除自研执行门禁，当前实现由[P07原生自动摘要重构](P07-NATIVE-SUMMARIZATION.md)替代；48k/480k及40/30不再是新Run执行额度，旧历史数据仍保留。本页原测试/SHA是当时证据，不替代重构后的独立验证，P07仍PENDING_REVIEW。

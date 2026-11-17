@@ -73,7 +73,14 @@ def test_timeout_queued_cancellation_and_no_live_tasks(tmp_path, monkeypatch):
             run = await active_run(repo, thread)
             plans = PlanRepository(repo.database)
             registry = TaskRegistry(concurrency=1)
-            dispatcher = TaskDispatcher(plans, lambda: None, registry, timeout=0.02)
+            # 此测试只观察队列/时限，create_agent已替换为Slow，无模型可供原生摘要。
+            dispatcher = TaskDispatcher(
+                plans,
+                lambda: None,
+                registry,
+                timeout=0.02,
+                settings=Settings(summarization_enabled=False),
+            )
             ctx = AgentRunContext(
                 thread.id, run.id, ws, PlanService(plans), task_dispatcher=dispatcher
             )
